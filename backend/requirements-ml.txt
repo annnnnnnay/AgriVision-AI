@@ -1,0 +1,2 @@
+# Optional dependencies for local TensorFlow model inference and training.
+tensorflow==2.18.1

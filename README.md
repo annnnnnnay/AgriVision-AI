@@ -112,13 +112,17 @@ cd backend
 python -m venv venv
 venv\Scripts\activate      # On Windows
 source venv/bin/activate   # On Linux/macOS
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-ml.txt
 
 # Copy the credential-free local demo configuration (uses the bundled model)
 cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 > API docs available at: http://127.0.0.1:8000/docs
+
+Install `requirements-dev.txt` as well to run the backend test suite. Vercel
+uses only `requirements.txt`; the local TensorFlow model dependencies are
+isolated in `requirements-ml.txt`.
 
 ### 3. Start the Frontend
 ```bash

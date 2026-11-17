@@ -1,3 +1,4 @@
+import builtins
 import json
 import sys
 import types
@@ -8,6 +9,26 @@ import pytest
 
 from app.services import model_service
 from app.services.model_service import ModelService
+
+
+def test_skip_tensorflow_load_works_without_importing_tensorflow(monkeypatch):
+    imported_modules = []
+    original_import = builtins.__import__
+
+    def track_tensorflow_import(name, *args, **kwargs):
+        if name == "tensorflow":
+            imported_modules.append(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("SKIP_TF_LOAD", "true")
+    monkeypatch.setattr(model_service.settings, "LOCAL_DEMO_MODE", False)
+    monkeypatch.setattr(builtins, "__import__", track_tensorflow_import)
+
+    service = ModelService()
+    service.load_model()
+
+    assert not service.is_loaded
+    assert imported_modules == []
 
 
 def test_tomato_leaf_shape_prefers_tomato_for_early_blight():
