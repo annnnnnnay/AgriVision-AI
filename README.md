@@ -13,7 +13,7 @@
 ![Render](https://img.shields.io/badge/Render-Backend-46E3B7?style=for-the-badge&logo=render&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-Upload a crop leaf photo → Get instant universal disease diagnosis with organic and chemical treatment recommendations in **English, Hindi, and Marathi**.
+Upload a crop image → Get AI-assisted disease screening and treatment information in **English, Hindi, and Marathi**. Confirm diagnoses visually; predictions are not a substitute for expert advice.
 
 [Features](#-features) · [Architecture](#-architecture) · [Tech Stack](#-tech-stack) · [Quick Start](#-quick-start) · [API Docs](#-api-documentation) · [Deployment](#-deployment)
 
@@ -29,9 +29,9 @@ Indian agriculture loses **₹90,000+ crores annually** to crop diseases. Farmer
 
 AgriVision AI uses a unique, resilient **three-tiered cascade architecture** to diagnose crop leaves:
 
-1. **Tier 1 (Gemini 2.5 Flash Vision API)**: Analyzes the image using Google's cloud vision model for universal crop support and zero-shot disease identification.
-2. **Tier 2 (OpenRouter Vision API Fallback)**: If Gemini API limits are hit, cascades immediately to secondary large vision models to ensure continuous uptime.
-3. **Tier 3 (Local TF MobileNetV2 Classifier)**: If internet connectivity is lost or upstream APIs fail, runs inference locally using a fine-tuned MobileNetV2 model detecting 38 classes across 14 crops.
+1. **Tier 1 (Gemini 3.8 Flash Vision API)**: Attempts cloud image analysis when configured. Crop and disease results are not guaranteed and should be checked against the image.
+2. **Tier 2 (OpenRouter Vision API Fallback)**: Tries a second cloud vision provider if Gemini is unavailable or conflicts with a supplied crop hint.
+3. **Tier 3 (Local TF MobileNetV2 Classifier)**: If both cloud providers fail, local inference is available only when the user explicitly selects a leaf image. It uses 46 mapped leaf-disease classes across 15 crops, rejects low-confidence predictions, and filters to a supplied crop hint. Fruit, other, and unspecified images are declined rather than forced into a leaf label. Accuracy has not been independently re-evaluated because the labeled dataset is not included.
 
 ---
 
@@ -39,7 +39,7 @@ AgriVision AI uses a unique, resilient **three-tiered cascade architecture** to 
 
 | Feature | Description |
 |---------|-------------|
-| 🔍 **Disease Detection** | Upload a leaf photo, get instant universal AI diagnosis in <2s |
+| 🔍 **Disease Detection** | Upload a plant photo for cloud-assisted diagnosis; local fallback is restricted to selected leaf images |
 | 📊 **Confidence Scoring** | Visual metrics showing diagnosis reliability |
 | ⚠️ **Severity Assessment** | High / Moderate / Low severity classification |
 | 💊 **Treatment Advice** | Organic and chemical treatment recommendations |
@@ -66,7 +66,7 @@ AgriVision AI uses a unique, resilient **three-tiered cascade architecture** to 
 │      Routers · Schemas · Security Headers · Auth       │
 ├───────────────────────────┬────────────────────────────┤
 │   Universal AI Engine     │  Local Classifier (TF)     │
-│   Gemini 2.5 / OpenRouter │  MobileNetV2 (Offline)     │
+│   Gemini 3.8 / OpenRouter │  MobileNetV2 (Offline)     │
 └───────────────────────────┼────────────────────────────┘
                             │ DB Clients (RLS Enabled)
 ┌───────────────────────────┴────────────────────────────┐
@@ -81,7 +81,7 @@ AgriVision AI uses a unique, resilient **three-tiered cascade architecture** to 
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **AI/ML** | Gemini 2.5 Flash, TensorFlow 2.x, MobileNetV2 | Hybrid vision APIs & offline edge classifier |
+| **AI/ML** | Gemini 3.8 Flash, TensorFlow 2.x, MobileNetV2 | Hybrid vision APIs & offline edge classifier |
 | **Backend** | FastAPI, Python 3.11, Pydantic, Uvicorn | Async REST API with automatic security headers |
 | **Frontend** | React 18, Vite, Tailwind CSS, Framer Motion | Animated, responsive modern user experience |
 | **Charts** | Recharts | Premium custom gradient bar charts & donut distributions |
@@ -114,7 +114,7 @@ venv\Scripts\activate      # On Windows
 source venv/bin/activate   # On Linux/macOS
 pip install -r requirements.txt
 
-# Create .env from example and fill in Supabase and Gemini keys
+# Copy the credential-free local demo configuration (uses the bundled model)
 cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
@@ -126,10 +126,27 @@ cd frontend
 # Install dependencies
 npm install
 
+# Create frontend/.env from frontend/.env.example and set the Supabase project URL
+# and publishable/anon key as VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.
 # Start Vite server (runs on port 5176 to avoid local caching conflicts)
 npm run dev
 ```
 > App available at: http://localhost:5176
+
+### Supabase Authentication
+
+Email/password registration, email confirmation, Google OAuth, password reset,
+and API access-token validation use Supabase Auth. Configure the Supabase project
+URL and **publishable/anon** key in both `backend/.env` and `frontend/.env`.
+Never put a Supabase `service_role` key in the frontend.
+
+In Supabase Authentication → URL Configuration, set the local Site URL to
+`http://localhost:5176` and allow `http://localhost:5176/auth/callback`.
+Add your deployed app origin and `/auth/callback` there as well. In Google Cloud,
+the OAuth redirect URI is the Supabase callback URL shown by the Google provider
+settings (usually `https://<project-ref>.supabase.co/auth/v1/callback`); it is
+not the app callback URL. Restart Vite after changing frontend environment
+variables.
 
 ---
 
@@ -149,7 +166,7 @@ Interactive API documents are available at:
 # Health check
 GET /api/health
 
-# Predict disease (upload image - Requires auth token)
+# Predict disease (auth token required unless LOCAL_DEMO_MODE=true in development)
 POST /api/v1/predict
   - file: image (multipart/form-data)
   - language: en | hi | mr
@@ -169,6 +186,15 @@ GET /api/v1/analytics
 ## ☁️ Deployment (Free Lifetime Setup)
 
 Refer to the production configuration guidelines for hosting this stack at zero cost:
+
+### Local Docker Compose
+
+Copy `backend/.env.example` to `backend/.env`, set `SECRET_KEY` to a random secret
+of at least 32 characters, and configure a cloud inference key if the local model
+is unavailable. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the
+environment used by Docker Compose so they are available at frontend build time.
+Then run `docker compose up --build`. The frontend is served at
+http://localhost:3000 and proxies API requests to the backend.
 
 ### 1. Backend (Render)
 - Deploy your `backend` directory to **Render Web Services**.

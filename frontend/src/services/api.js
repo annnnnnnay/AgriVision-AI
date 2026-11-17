@@ -1,6 +1,8 @@
 import axios from "axios";
+import { supabase } from "./supabase";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+const PREDICTION_TIMEOUT_MS = 110000;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -12,10 +14,18 @@ const api = axios.create({
 
 // Request interceptor — add auth token
 api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem("token");
+  async (config) => {
+    let token = localStorage.getItem("token");
+    if (supabase) {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      token = data.session?.access_token || null;
+    }
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    } else {
+      delete config.headers.Authorization;
     }
     return config;
   },
@@ -26,6 +36,14 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
+      return Promise.reject(
+        new Error(
+          "Image analysis timed out. Please retry with a smaller image or check the vision provider configuration."
+        )
+      );
+    }
+
     const message =
       error.response?.data?.error?.message ||
       error.response?.data?.message ||
@@ -36,15 +54,23 @@ api.interceptors.response.use(
 );
 
 /**
- * Upload a leaf image for disease prediction.
+ * Upload a plant image for disease prediction.
  */
-export async function predictDisease(imageFile, language = "en") {
+export async function predictDisease(
+  imageFile,
+  language = "en",
+  imageType = "unknown",
+  cropHint = ""
+) {
   const formData = new FormData();
   formData.append("file", imageFile);
   formData.append("language", language);
+  formData.append("image_type", imageType);
+  if (cropHint.trim()) formData.append("crop_hint", cropHint.trim());
 
   const response = await api.post("/api/v1/predict", formData, {
     headers: { "Content-Type": "multipart/form-data" },
+    timeout: PREDICTION_TIMEOUT_MS,
   });
 
   return response.data;

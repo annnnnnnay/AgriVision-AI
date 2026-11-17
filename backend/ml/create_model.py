@@ -23,9 +23,9 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-# Constants matching the app's config
-IMAGE_SIZE = 224
-NUM_CLASSES = 40  # 38 PlantVillage classes + 2 extras from class_mapping.json (indices 0-39)
+# Constants matching the actual trained model.
+IMAGE_SIZE = 160
+NUM_CLASSES = 46  # Matches the bundled class_mapping.json and best_model.keras.
 
 
 def create_model() -> keras.Model:

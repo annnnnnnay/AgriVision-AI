@@ -7,6 +7,7 @@ import Analyze from "./pages/Analyze";
 import About from "./pages/About";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import AuthCallback from "./pages/AuthCallback";
 import Dashboard from "./pages/Dashboard";
 import History from "./pages/History";
 import Profile from "./pages/Profile";
@@ -45,6 +46,7 @@ export default function App() {
         {/* Auth routes — outside layout (no navbar/footer) */}
         <Route path="/auth/login" element={<Login />} />
         <Route path="/auth/register" element={<Register />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
       </Routes>
     </AuthProvider>
   );

@@ -2,8 +2,6 @@
 # AgriVision AI — Docker Compose Configuration
 # =============================================
 
-version: "3.9"
-
 services:
   # --- Backend API ---
   backend:
@@ -17,8 +15,11 @@ services:
     environment:
       - ENVIRONMENT=production
       - DEBUG=false
+      - LOCAL_DEMO_MODE=false
       - LOG_LEVEL=INFO
       - LOG_FORMAT=json
+    env_file:
+      - ./backend/.env
     volumes:
       - ./backend/ml/models:/app/ml/models:ro
       - ./backend/data:/app/data:ro
@@ -35,11 +36,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
     container_name: agrivision-frontend
     ports:
-      - "3000:3000"
-    environment:
-      - VITE_API_URL=http://localhost:8000
+      - "3000:80"
     depends_on:
       backend:
         condition: service_healthy

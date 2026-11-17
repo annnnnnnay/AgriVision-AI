@@ -8,7 +8,6 @@ import {
   TrendingUp,
   AlertTriangle,
   CheckCircle2,
-  Clock,
   Loader2,
 } from "lucide-react";
 import {
@@ -39,19 +38,19 @@ const SEVERITY_COLORS = {
 };
 
 export default function Dashboard() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, isGuestPreview, loading: authLoading } = useAuth();
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!authLoading) {
-      if (isAuthenticated) {
+      if (isAuthenticated || isGuestPreview) {
         fetchAnalytics();
       } else {
         setLoading(false);
       }
     }
-  }, [isAuthenticated, authLoading]);
+  }, [isAuthenticated, isGuestPreview, authLoading]);
 
   const fetchAnalytics = async () => {
     try {
@@ -72,7 +71,7 @@ export default function Dashboard() {
     );
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !isGuestPreview) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
         <motion.div

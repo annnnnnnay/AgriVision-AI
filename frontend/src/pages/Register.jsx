@@ -1,13 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import { Leaf, Mail, Lock, User, MapPin, UserPlus, Loader2 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import GoogleSignInButton from "../components/auth/GoogleSignInButton";
 
 export default function Register() {
   const navigate = useNavigate();
-  const { register } = useAuth();
+  const { register, signInWithGoogle, isSupabaseConfigured } = useAuth();
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -16,39 +17,18 @@ export default function Register() {
     location: "",
   });
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    async function autoGeolocate() {
-      try {
-        const response = await fetch("https://ipapi.co/json/");
-        if (response.ok) {
-          const data = await response.json();
-          if (data && data.city) {
-            setForm((prev) => ({
-              ...prev,
-              location: `${data.city}, ${data.region || data.country_name || ""}`
-            }));
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn("Silent IP Geolocation lookup failed: defaulting", err);
-      }
-      // Default to "Pune, Maharashtra, India" if lookup fails
-      setForm((prev) => ({ ...prev, location: "Pune, Maharashtra, India" }));
-    }
-    autoGeolocate();
-  }, []);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [confirmationEmail, setConfirmationEmail] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!form.name || !form.email || !form.password) {
+    if (!form.name.trim() || !form.email.trim() || !form.password) {
       toast.error("Please fill in all required fields.");
       return;
     }
-    if (form.password.length < 6) {
-      toast.error("Password must be at least 6 characters.");
+    if (form.password.length < 8) {
+      toast.error("Password must be at least 8 characters.");
       return;
     }
     if (form.password !== form.confirmPassword) {
@@ -58,13 +38,32 @@ export default function Register() {
 
     setLoading(true);
     try {
-      await register(form.name, form.email, form.password, form.location);
+      const registration = await register(
+        form.name,
+        form.email,
+        form.password,
+        form.location
+      );
+      if (registration.requiresEmailConfirmation) {
+        setConfirmationEmail(form.email.trim());
+        return;
+      }
       toast.success("Account created successfully!");
       navigate("/analyze");
     } catch (err) {
       toast.error(err.message || "Registration failed.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      toast.error(err.message || "Google sign-in failed.");
+      setGoogleLoading(false);
     }
   };
 
@@ -91,6 +90,16 @@ export default function Register() {
         </div>
 
         <div className="glass-card p-8">
+          {confirmationEmail && (
+            <div
+              role="status"
+              className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"
+            >
+              Account created. Check <strong>{confirmationEmail}</strong> for
+              the confirmation link, then return here to sign in.
+            </div>
+          )}
+          {!confirmationEmail && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -104,6 +113,8 @@ export default function Register() {
                   onChange={updateField("name")}
                   className="input-field pl-11"
                   placeholder="Rajesh Kumar"
+                  autoComplete="name"
+                  required
                 />
               </div>
             </div>
@@ -121,6 +132,7 @@ export default function Register() {
                   className="input-field pl-11"
                   placeholder="farmer@example.com"
                   autoComplete="email"
+                  required
                 />
               </div>
             </div>
@@ -152,8 +164,10 @@ export default function Register() {
                   value={form.password}
                   onChange={updateField("password")}
                   className="input-field pl-11"
-                  placeholder="At least 6 characters"
+                  placeholder="At least 8 characters"
                   autoComplete="new-password"
+                  minLength={8}
+                  required
                 />
               </div>
             </div>
@@ -171,13 +185,15 @@ export default function Register() {
                   className="input-field pl-11"
                   placeholder="Re-enter your password"
                   autoComplete="new-password"
+                  minLength={8}
+                  required
                 />
               </div>
             </div>
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || googleLoading}
               className="btn-primary w-full py-3.5 text-base mt-2"
             >
               {loading ? (
@@ -192,6 +208,15 @@ export default function Register() {
               )}
             </button>
           </form>
+          )}
+
+          {isSupabaseConfigured && !confirmationEmail && (
+            <GoogleSignInButton
+              onClick={handleGoogleSignIn}
+              disabled={loading}
+              loading={googleLoading}
+            />
+          )}
 
           <div className="mt-6 text-center">
             <p className="text-sm text-slate-500">

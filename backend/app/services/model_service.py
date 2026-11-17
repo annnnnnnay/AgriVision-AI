@@ -9,6 +9,7 @@ import json
 import logging
 import time
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -19,6 +20,7 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 class ModelService:
@@ -29,6 +31,7 @@ class ModelService:
         self._class_names: List[str] = []
         self._class_mapping: Dict[int, Dict] = {}
         self._is_loaded = False
+        self._input_size = (settings.IMAGE_SIZE, settings.IMAGE_SIZE)
         self._model_version = settings.MODEL_VERSION
 
     @property
@@ -37,7 +40,7 @@ class ModelService:
 
     def load_model(self) -> None:
         """Load the TensorFlow model and class mapping from disk."""
-        if os.getenv("SKIP_TF_LOAD") == "true":
+        if os.getenv("SKIP_TF_LOAD") == "true" and not settings.LOCAL_DEMO_MODE:
             logger.info("SKIP_TF_LOAD is true. Skipping local TensorFlow model loading to save RAM.")
             self._load_demo_mode()
             return
@@ -46,12 +49,14 @@ class ModelService:
             import tensorflow as tf
 
             model_path = settings.MODEL_DIR / settings.MODEL_NAME
-            class_mapping_path = Path("data/class_mapping.json")
+            class_mapping_path = BACKEND_DIR / "data" / "class_mapping.json"
 
             if not model_path.exists():
+                if settings.LOCAL_DEMO_MODE:
+                    raise FileNotFoundError(f"Trained model not found at {model_path}.")
                 logger.warning(
                     f"Model file not found at {model_path}. "
-                    "Running in DEMO mode with random predictions."
+                    "Cloud inference will be used if configured."
                 )
                 self._load_demo_mode()
                 return
@@ -62,25 +67,37 @@ class ModelService:
                 compile=False,  # No need to compile for inference
             )
 
+            input_shape = self._model.input_shape
+            if isinstance(input_shape, list):
+                input_shape = input_shape[0]
+            height, width = input_shape[1:3]
+            if height is not None and width is not None:
+                self._input_size = (int(height), int(width))
+
             # Warm up the model with a dummy prediction
-            dummy_input = np.random.rand(1, settings.IMAGE_SIZE, settings.IMAGE_SIZE, 3).astype(np.float32)
+            dummy_input = np.random.rand(1, *self._input_size, 3).astype(np.float32)
             self._model.predict(dummy_input, verbose=0)
 
             # Load class mapping
-            if class_mapping_path.exists():
-                with open(class_mapping_path, "r") as f:
-                    raw_mapping = json.load(f)
-                    self._class_mapping = {
-                        int(k): v for k, v in raw_mapping.items()
-                    }
-                    self._class_names = [
-                        self._class_mapping[i]["name"]
-                        for i in sorted(self._class_mapping.keys())
-                    ]
-            else:
-                # Fallback: generate generic class names
-                num_classes = self._model.output_shape[-1]
-                self._class_names = [f"class_{i}" for i in range(num_classes)]
+            if not class_mapping_path.exists():
+                raise FileNotFoundError(
+                    f"Model class mapping not found at {class_mapping_path}."
+                )
+            with open(class_mapping_path, "r") as f:
+                raw_mapping = json.load(f)
+                self._class_mapping = {
+                    int(k): v for k, v in raw_mapping.items()
+                }
+                output_count = int(self._model.output_shape[-1])
+                if len(self._class_mapping) != output_count:
+                    raise ValueError(
+                        f"Model has {output_count} outputs but class mapping contains "
+                        f"{len(self._class_mapping)} classes."
+                    )
+                self._class_names = [
+                    self._class_mapping[i]["name"]
+                    for i in sorted(self._class_mapping.keys())
+                ]
 
             self._is_loaded = True
             logger.info(
@@ -90,17 +107,21 @@ class ModelService:
             )
 
         except ImportError:
-            logger.error("TensorFlow not installed. Running in demo mode.")
+            logger.error("TensorFlow is not installed; local model inference is unavailable.")
+            if settings.LOCAL_DEMO_MODE:
+                raise RuntimeError("TensorFlow is required when LOCAL_DEMO_MODE is enabled.")
             self._load_demo_mode()
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
+            if settings.LOCAL_DEMO_MODE:
+                raise RuntimeError("Failed to load the trained local model.") from e
             self._load_demo_mode()
 
     def _load_demo_mode(self) -> None:
-        """Initialize demo mode — returns random predictions without a real model."""
-        logger.info("Running in DEMO MODE — predictions will be simulated.")
+        """Load class labels when inference is delegated to a cloud provider."""
+        logger.info("No local model loaded; cloud inference is required.")
         # Load class names from mapping if available
-        class_mapping_path = Path("data/class_mapping.json")
+        class_mapping_path = BACKEND_DIR / "data" / "class_mapping.json"
         if class_mapping_path.exists():
             with open(class_mapping_path, "r") as f:
                 raw_mapping = json.load(f)
@@ -112,55 +133,46 @@ class ModelService:
                     for i in sorted(self._class_mapping.keys())
                 ]
         else:
-            # Minimal fallback
-            self._class_names = [
-                "Tomato___Early_blight",
-                "Tomato___Late_blight",
-                "Tomato___Healthy",
-                "Potato___Early_blight",
-                "Potato___Late_blight",
-                "Potato___Healthy",
-                "Corn___Common_rust",
-                "Corn___Healthy",
-                "Rice___Bacterial_leaf_blight",
-                "Rice___Healthy",
-            ]
-        self._is_loaded = True
+            self._class_names = []
+        self._is_loaded = False
 
     def preprocess_image(self, image: Image.Image) -> np.ndarray:
         """
         Preprocess a PIL image for model inference.
 
         Steps:
-        1. Resize to model input size (224x224)
+        1. Resize to the saved model's input size (160x160)
         2. Convert to RGB (handles RGBA, grayscale, etc.)
-        3. Normalize pixel values to [0, 1]
+        3. Leave pixel values in the model-native scale
         4. Add batch dimension
         """
         # Ensure RGB
         if image.mode != "RGB":
             image = image.convert("RGB")
 
-        # Resize with high-quality resampling
+        # Resize to the exact trained model input shape.
         image = image.resize(
-            (settings.IMAGE_SIZE, settings.IMAGE_SIZE),
+            (self._input_size[1], self._input_size[0]),
             Image.Resampling.LANCZOS,
         )
 
-        # Convert to numpy array (keep raw pixel values [0, 255])
-        # The model's internal layers (Rescaling) handle normalization.
+        # Keep raw pixel values and rely on the model's Rescaling layer.
         img_array = np.array(image, dtype=np.float32)
-
-        # Add batch dimension: (H, W, C) → (1, H, W, C)
         img_array = np.expand_dims(img_array, axis=0)
 
         return img_array
 
-    def predict_gemini(self, image: Image.Image, language: str = "en") -> Optional[Dict]:
+    def predict_gemini(
+        self,
+        image: Image.Image,
+        language: str = "en",
+        image_type: str = "unknown",
+        crop_hint: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
-        Run inference using Gemini 1.5 Flash Vision API.
+        Run inference using the Gemini Flash Vision API.
         """
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = settings.GEMINI_API_KEY
         if not api_key:
             logger.warning("GEMINI_API_KEY not configured. Skipping Gemini prediction.")
             return None
@@ -169,98 +181,43 @@ class ModelService:
             import google.generativeai as genai
             genai.configure(api_key=api_key)
 
-            # Keep image size reasonable for API transmission
-            # Resize image to max 800x800 if larger
-            img_copy = image.copy()
-            if img_copy.width > 800 or img_copy.height > 800:
-                img_copy.thumbnail((800, 800), Image.Resampling.LANCZOS)
+            img_copy = self._prepare_cloud_image(image)
 
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            model = genai.GenerativeModel(settings.GEMINI_MODEL)
 
-            lang_map = {
-                "en": "English",
-                "hi": "Hindi",
-                "mr": "Marathi"
-            }
-            lang_name = lang_map.get(language, "English")
+            prompt = self._build_vision_prompt(language, image_type, crop_hint)
 
-            prompt = f"""
-You are a world-class agronomy AI assistant and crop disease expert.
-Analyze this image of a crop plant (it could be a leaf, fruit, stem, or root).
-Identify the crop name, the specific disease (if any), and determine if the plant is healthy.
-You must return a structured JSON object in {lang_name} language.
-All text fields (crop, disease, description, symptoms, causes, treatments, prevention, severity_info) must be localized in {lang_name}.
-
-The JSON response must follow this schema exactly:
-{{
-  "crop": "Name of the crop (e.g. Mango, Tomato, Wheat)",
-  "disease": "Name of the disease (e.g. Anthracnose, Early Blight, Healthy)",
-  "disease_id": "lowercase_snake_case_id (e.g. mango_anthracnose, healthy)",
-  "confidence": 0.95,
-  "is_healthy": false,
-  "severity": "high", // one of "high", "moderate", "low", or null
-  "description": "Detailed description of the disease...",
-  "symptoms": ["symptom 1", "symptom 2"],
-  "causes": ["cause 1", "cause 2"],
-  "treatment": {{
-    "organic": ["organic method 1"],
-    "chemical": ["chemical method 1"]
-  }},
-  "prevention": ["prevention tip 1"],
-  "severity_info": "instructions based on severity..."
-}}
-"""
-
-            logger.info(f"Sending image to Gemini 2.5 Flash (lang: {language})...")
+            logger.info("Sending image to Gemini %s (lang: %s)...", settings.GEMINI_MODEL, language)
             start_time = time.perf_counter()
             response = model.generate_content(
                 [img_copy, prompt],
-                generation_config={"response_mime_type": "application/json"}
+                generation_config={"response_mime_type": "application/json"},
+                request_options={
+                    "timeout": settings.PREDICTION_PROVIDER_TIMEOUT_SECONDS,
+                    "retry": None,
+                },
             )
 
             processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
             
             data = json.loads(response.text.strip())
-            
-            predicted_class = data.get("disease_id", "unknown")
-            if data.get("is_healthy", False):
-                predicted_class = f"{data.get('crop', 'unknown').lower()}_healthy"
-
-            top_predictions = [
-                {
-                    "class": predicted_class,
-                    "confidence": float(data.get("confidence", 0.95))
-                }
-            ]
-
-            return {
-                "predicted_class": predicted_class,
-                "confidence": float(data.get("confidence", 0.95)),
-                "crop": data.get("crop", "Unknown"),
-                "is_healthy": bool(data.get("is_healthy", False)),
-                "severity": data.get("severity"),
-                "top_predictions": top_predictions,
-                "processing_time_ms": processing_time_ms,
-                "model_version": "gemini-2.5-flash",
-                "gemini_rich_info": {
-                    "name": data.get("disease", "Unknown"),
-                    "crop": data.get("crop", "Unknown"),
-                    "description": data.get("description", ""),
-                    "symptoms": data.get("symptoms", []),
-                    "causes": data.get("causes", []),
-                    "treatment": data.get("treatment", {}),
-                    "prevention": data.get("prevention", []),
-                    "severity_info": data.get("severity_info")
-                }
-            }
+            return self._build_vision_result(
+                data, processing_time_ms, settings.GEMINI_MODEL, crop_hint
+            )
 
         except Exception as e:
             logger.error(f"Gemini prediction failed, falling back to OpenRouter/Local model: {e}", exc_info=True)
             return None
 
-    def predict_openrouter(self, image: Image.Image, language: str = "en") -> Optional[Dict]:
+    def predict_openrouter(
+        self,
+        image: Image.Image,
+        language: str = "en",
+        image_type: str = "unknown",
+        crop_hint: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
-        Run inference using OpenRouter Vision API (meta-llama/llama-3.2-11b-vision-instruct or google/gemini-2.5-flash).
+        Run inference using OpenRouter Vision API with Gemini or Llama vision.
         """
         api_key = settings.OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY")
         if not api_key:
@@ -272,54 +229,19 @@ The JSON response must follow this schema exactly:
             import base64
             from io import BytesIO
 
-            # Keep image size reasonable
-            img_copy = image.copy()
-            if img_copy.width > 800 or img_copy.height > 800:
-                img_copy.thumbnail((800, 800), Image.Resampling.LANCZOS)
+            img_copy = self._prepare_cloud_image(image)
 
             # Convert to base64
             buffered = BytesIO()
-            img_copy.save(buffered, format="JPEG")
+            img_copy.save(buffered, format="JPEG", quality=85, optimize=True)
             img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-            lang_map = {
-                "en": "English",
-                "hi": "Hindi",
-                "mr": "Marathi"
-            }
-            lang_name = lang_map.get(language, "English")
-
-            prompt = f"""
-You are a world-class agronomy AI assistant and crop disease expert.
-Analyze this image of a crop plant (it could be a leaf, fruit, stem, or root).
-Identify the crop name, the specific disease (if any), and determine if the plant is healthy.
-You must return a structured JSON object in {lang_name} language.
-All text fields (crop, disease, description, symptoms, causes, treatments, prevention, severity_info) must be localized in {lang_name}.
-
-The JSON response must follow this schema exactly:
-{{
-  "crop": "Name of the crop (e.g. Mango, Tomato, Wheat)",
-  "disease": "Name of the disease (e.g. Anthracnose, Early Blight, Healthy)",
-  "disease_id": "lowercase_snake_case_id (e.g. mango_anthracnose, healthy)",
-  "confidence": 0.95,
-  "is_healthy": false,
-  "severity": "high", // one of "high", "moderate", "low", or null
-  "description": "Detailed description of the disease...",
-  "symptoms": ["symptom 1", "symptom 2"],
-  "causes": ["cause 1", "cause 2"],
-  "treatment": {{
-    "organic": ["organic method 1"],
-    "chemical": ["chemical method 1"]
-  }},
-  "prevention": ["prevention tip 1"],
-  "severity_info": "instructions based on severity..."
-}}
-"""
+            prompt = self._build_vision_prompt(language, image_type, crop_hint)
 
             logger.info(f"Sending image to OpenRouter Vision API (lang: {language})...")
             start_time = time.perf_counter()
 
-            model_name = "google/gemini-2.5-flash"
+            model_name = f"google/{settings.GEMINI_MODEL}"
             
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {
@@ -352,13 +274,20 @@ The JSON response must follow this schema exactly:
                 "max_tokens": 1000
             }
 
-            res = httpx.post(url, headers=headers, json=payload, timeout=40.0)
-            if res.status_code != 200:
-                logger.warning(f"OpenRouter {model_name} failed ({res.status_code}: {res.text}). Trying Llama 3.2 Vision...")
+            timeout = settings.PREDICTION_PROVIDER_TIMEOUT_SECONDS
+            res = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+            if res.status_code in {400, 404}:
+                logger.warning(
+                    "OpenRouter model %s returned %d; trying Llama 3.2 Vision.",
+                    model_name,
+                    res.status_code,
+                )
                 payload["model"] = "meta-llama/llama-3.2-11b-vision-instruct"
-                res = httpx.post(url, headers=headers, json=payload, timeout=40.0)
-                
-            res.raise_for_status()
+                res = httpx.post(url, headers=headers, json=payload, timeout=timeout)
+            if res.status_code != 200:
+                logger.warning("OpenRouter request failed with status %d.", res.status_code)
+                return None
+
             response_data = res.json()
             
             # Extract content
@@ -366,61 +295,240 @@ The JSON response must follow this schema exactly:
             processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
             
             data = json.loads(content_text.strip())
-            
-            predicted_class = data.get("disease_id", "unknown")
-            if data.get("is_healthy", False):
-                predicted_class = f"{data.get('crop', 'unknown').lower()}_healthy"
-
-            top_predictions = [
-                {
-                    "class": predicted_class,
-                    "confidence": float(data.get("confidence", 0.95))
-                }
-            ]
-
-            return {
-                "predicted_class": predicted_class,
-                "confidence": float(data.get("confidence", 0.95)),
-                "crop": data.get("crop", "Unknown"),
-                "is_healthy": bool(data.get("is_healthy", False)),
-                "severity": data.get("severity"),
-                "top_predictions": top_predictions,
-                "processing_time_ms": processing_time_ms,
-                "model_version": f"openrouter-{response_data.get('model', 'gemini-2.5-flash')}",
-                "gemini_rich_info": {
-                    "name": data.get("disease", "Unknown"),
-                    "crop": data.get("crop", "Unknown"),
-                    "description": data.get("description", ""),
-                    "symptoms": data.get("symptoms", []),
-                    "causes": data.get("causes", []),
-                    "treatment": data.get("treatment", {}),
-                    "prevention": data.get("prevention", []),
-                    "severity_info": data.get("severity_info")
-                }
-            }
+            return self._build_vision_result(
+                data,
+                processing_time_ms,
+                f"openrouter-{response_data.get('model', settings.GEMINI_MODEL)}",
+                crop_hint,
+            )
 
         except Exception as e:
             logger.error(f"OpenRouter prediction failed, falling back to local model: {e}", exc_info=True)
             return None
 
-    def predict(self, image: Image.Image, language: str = "en") -> Dict:
+    def predict(
+        self,
+        image: Image.Image,
+        language: str = "en",
+        image_type: str = "unknown",
+        crop_hint: Optional[str] = None,
+    ) -> Dict:
         """
-        Run hybrid inference: try Gemini API first, then OpenRouter (Universal Fallback), and finally local TensorFlow.
+        Try cloud vision providers first, then fall back to the local leaf classifier.
         """
-        # 1. Try Gemini
-        gemini_result = self.predict_gemini(image, language)
+        if image_type not in {"leaf", "fruit", "other", "unknown"}:
+            raise ValueError("image_type must be leaf, fruit, other, or unknown.")
+
+        canonical_crop_hint = self._canonicalize_crop_hint(crop_hint)
+        gemini_result = self.predict_gemini(
+            image, language, image_type, canonical_crop_hint
+        )
         if gemini_result is not None:
-            return gemini_result
+            if self._matches_crop_hint(gemini_result, canonical_crop_hint):
+                logger.info("Prediction completed with Gemini (tier 1).")
+                return gemini_result
+            logger.warning("Gemini result conflicts with the selected crop; trying the next tier.")
 
-        # 2. Try OpenRouter (Universal Secondary Engine)
-        openrouter_result = self.predict_openrouter(image, language)
+        openrouter_result = self.predict_openrouter(
+            image, language, image_type, canonical_crop_hint
+        )
         if openrouter_result is not None:
-            return openrouter_result
+            if self._matches_crop_hint(openrouter_result, canonical_crop_hint):
+                logger.info("Prediction completed with OpenRouter (tier 2).")
+                return openrouter_result
+            logger.warning("OpenRouter result conflicts with the selected crop.")
 
-        # 3. Failover to Local model (Tertiary Offline Engine)
-        return self.predict_local(image)
+        if image_type != "leaf":
+            raise RuntimeError(
+                "Cloud vision is unavailable or could not verify this image. "
+                "The local model supports leaf photos only; configure a vision provider "
+                "for fruit, other, or unspecified images."
+            )
 
-    def predict_local(self, image: Image.Image) -> Dict:
+        if self._model is None:
+            raise RuntimeError(
+                "Cloud vision is unavailable, and no local model is loaded."
+            )
+
+        logger.info("Cloud providers unavailable; using the local model (tier 3).")
+        return self.predict_local(image, crop_hint=canonical_crop_hint)
+
+    @staticmethod
+    def _prepare_cloud_image(image: Image.Image) -> Image.Image:
+        from io import BytesIO
+
+        prepared = image.convert("RGB")
+        prepared.thumbnail((800, 800), Image.Resampling.LANCZOS)
+        buffer = BytesIO()
+        prepared.save(buffer, format="JPEG", quality=85, optimize=True)
+        buffer.seek(0)
+        with Image.open(buffer) as compressed:
+            return compressed.copy()
+
+    @staticmethod
+    def _build_vision_prompt(
+        language: str, image_type: str, crop_hint: Optional[str]
+    ) -> str:
+        lang_name = {"en": "English", "hi": "Hindi", "mr": "Marathi"}.get(
+            language, "English"
+        )
+        part = {
+            "leaf": "The user says the image shows a leaf.",
+            "fruit": "The user says the image shows a fruit.",
+            "other": "The user says the image shows another plant part.",
+            "unknown": "The plant part is not specified; inspect the visible subject.",
+        }[image_type]
+        hint = (
+            f"The user identifies the crop as {crop_hint}. Verify this visually; "
+            "if the image does not support that crop, return Unknown rather than "
+            "substituting another crop."
+            if crop_hint
+            else "Identify the crop from visible evidence; do not guess from color alone."
+        )
+        return f"""
+You are an agricultural image triage assistant. Inspect the visible plant part before
+identifying a crop or disease. {part} {hint}
+For fruit, use multiple visible features rather than color alone to distinguish crops.
+Do not label an apple as tomato or strawberry without clear visual evidence; if unsure,
+return Unknown.
+When the image shows fruit, do not diagnose a leaf-only disease from the fruit.
+If the crop or disease is not visually identifiable, use "Unknown" and low confidence;
+do not invent symptoms, disease, or treatment. Do not provide treatment advice for an
+uncertain diagnosis.
+
+Return one valid JSON object with this schema:
+{{
+  "crop": "English crop name, or Unknown",
+  "disease": "English disease name, Healthy, or Unknown",
+  "disease_id": "English snake_case identifier, or unknown",
+  "confidence": 0.0,
+  "is_healthy": false,
+  "severity": null,
+  "description": "Localized in {lang_name}; empty when uncertain",
+  "symptoms": [],
+  "causes": [],
+  "treatment": {{"organic": [], "chemical": []}},
+  "prevention": [],
+  "severity_info": null
+}}
+Keep crop, disease, and disease_id in English. Localize only descriptive fields
+and advice in {lang_name}. Confidence must be a number from 0 to 1 reflecting visual
+evidence, not certainty in general knowledge.
+"""
+
+    def _build_vision_result(
+        self,
+        data: Dict,
+        processing_time_ms: float,
+        model_version: str,
+        crop_hint: Optional[str],
+    ) -> Optional[Dict]:
+        if not isinstance(data, dict):
+            return None
+
+        crop = str(data.get("crop", "Unknown")).strip() or "Unknown"
+        disease = str(data.get("disease", "Unknown")).strip() or "Unknown"
+        if crop_hint and not self._crop_names_match(crop, crop_hint):
+            logger.warning(
+                "Vision provider returned crop %r despite selected crop %r.",
+                crop,
+                crop_hint,
+            )
+            return None
+        if crop_hint:
+            crop = crop_hint
+
+        try:
+            confidence = float(data["confidence"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Vision provider returned no valid confidence score.")
+            return None
+        if not np.isfinite(confidence) or not 0 <= confidence <= 1:
+            logger.warning("Vision provider returned an out-of-range confidence score.")
+            return None
+
+        if crop.casefold() == "unknown" or disease.casefold() == "unknown":
+            logger.info("Vision provider abstained because crop or disease was unclear.")
+            return None
+
+        is_healthy = data.get("is_healthy") is True
+        predicted_class = f"{crop}___{'healthy' if is_healthy else self._slug(disease)}"
+        severity = data.get("severity") if not is_healthy else None
+        return {
+            "predicted_class": predicted_class,
+            "confidence": confidence,
+            "crop": crop,
+            "is_healthy": is_healthy,
+            "severity": severity,
+            "top_predictions": [{"class": predicted_class, "confidence": confidence}],
+            "processing_time_ms": processing_time_ms,
+            "model_version": model_version,
+            "gemini_rich_info": {
+                "name": disease,
+                "crop": crop,
+                "description": data.get("description", ""),
+                "symptoms": data.get("symptoms", []),
+                "causes": data.get("causes", []),
+                "treatment": data.get("treatment", {}),
+                "prevention": data.get("prevention", []),
+                "severity_info": data.get("severity_info"),
+            },
+        }
+
+    def _canonicalize_crop_hint(self, crop_hint: Optional[str]) -> Optional[str]:
+        if crop_hint is None or not crop_hint.strip():
+            return None
+
+        normalized_hint = self._normalize_crop_name(crop_hint)
+        if len(normalized_hint) < 3:
+            raise ValueError("Crop hint must contain at least three letters.")
+
+        supported_crops = {
+            str(info.get("crop") or self._extract_crop_name(info.get("name", "")))
+            for info in self._class_mapping.values()
+        }
+        matches = [
+            crop
+            for crop in supported_crops
+            if self._normalize_crop_name(crop).startswith(normalized_hint)
+        ]
+        if len(matches) != 1:
+            choices = ", ".join(sorted(supported_crops))
+            raise ValueError(f"Crop hint must match one supported crop: {choices}.")
+        return matches[0]
+
+    @staticmethod
+    def _normalize_crop_name(crop: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", crop.casefold())
+
+    @classmethod
+    def _crop_names_match(cls, left: str, right: str) -> bool:
+        normalized_left = cls._normalize_crop_name(left)
+        normalized_right = cls._normalize_crop_name(right)
+        return (
+            normalized_left == normalized_right
+            or normalized_left.startswith(normalized_right)
+            or normalized_right.startswith(normalized_left)
+        )
+
+    @staticmethod
+    def _slug(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+
+    @classmethod
+    def _matches_crop_hint(
+        cls, prediction: Dict, crop_hint: Optional[str]
+    ) -> bool:
+        crop = str(prediction.get("crop", "Unknown"))
+        return (
+            not crop_hint
+            or crop.casefold() == "unknown"
+            or cls._crop_names_match(crop, crop_hint)
+        )
+
+    def predict_local(
+        self, image: Image.Image, crop_hint: Optional[str] = None
+    ) -> Dict:
         """
         Run inference on an image and return predictions.
 
@@ -437,15 +545,32 @@ The JSON response must follow this schema exactly:
         # Preprocess
         processed = self.preprocess_image(image)
 
-        # Inference
-        if self._model is not None:
-            predictions = self._model.predict(processed, verbose=0)[0]
-        else:
-            # Demo mode — generate realistic random predictions
-            predictions = self._demo_predictions()
+        if self._model is None:
+            raise RuntimeError("No trained local model is loaded.")
 
-        # Get top predictions
-        top_indices = np.argsort(predictions)[::-1][:3]
+        predictions = self._model.predict(processed, verbose=0)[0]
+
+        if crop_hint:
+            crop_indices = [
+                index
+                for index, info in self._class_mapping.items()
+                if index < len(predictions)
+                and self._crop_names_match(
+                    str(info.get("crop") or self._extract_crop_name(info.get("name", ""))),
+                    crop_hint,
+                )
+            ]
+            if not crop_indices:
+                raise RuntimeError(
+                    f"The local model has no classes for the selected crop {crop_hint}."
+                )
+            crop_indices.sort(key=lambda index: predictions[index], reverse=True)
+        else:
+            # Select the crop from its combined class probability, then rank diseases within it.
+            _, crop_indices = self._select_crop_predictions(
+                predictions, self._class_mapping, image
+            )
+        top_indices = crop_indices[:3]
         top_predictions = []
         for idx in top_indices:
             class_name = (
@@ -459,9 +584,16 @@ The JSON response must follow this schema exactly:
             })
 
         # Best prediction
-        best_idx = top_indices[0]
         best_class = top_predictions[0]["class"]
         best_confidence = top_predictions[0]["confidence"]
+        if best_confidence < settings.CONFIDENCE_THRESHOLD:
+            raise RuntimeError(
+                "The local model could not make a confident leaf diagnosis. "
+                "Use a clearer leaf photo or configure a vision provider."
+            )
+
+        # Extract crop name from the selected crop's own disease class.
+        crop_name = self._extract_crop_name(best_class)
 
         # Determine if healthy
         is_healthy = "healthy" in best_class.lower()
@@ -470,9 +602,6 @@ The JSON response must follow this schema exactly:
         severity = self._assess_severity(best_confidence, is_healthy)
 
         processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
-
-        # Extract crop name from class
-        crop_name = self._extract_crop_name(best_class)
 
         return {
             "predicted_class": best_class,
@@ -485,17 +614,65 @@ The JSON response must follow this schema exactly:
             "model_version": self._model_version,
         }
 
-    def _demo_predictions(self) -> np.ndarray:
-        """Generate realistic-looking random predictions for demo mode."""
-        num_classes = len(self._class_names)
-        # Create weighted random predictions
-        raw = np.random.dirichlet(np.ones(num_classes) * 0.5)
-        # Make one class dominant
-        dominant_idx = np.random.randint(0, num_classes)
-        raw[dominant_idx] = np.random.uniform(0.7, 0.98)
-        # Normalize
-        raw = raw / raw.sum()
-        return raw
+    @staticmethod
+    def _select_crop_predictions(
+        predictions: np.ndarray,
+        class_mapping: Dict[int, Dict],
+        image: Optional[Image.Image] = None,
+    ) -> Tuple[int, List[int]]:
+        """Choose a crop by total score, correcting obvious shape mismatches."""
+        if not class_mapping:
+            ranked_indices = np.argsort(predictions)[::-1].tolist()
+            return ranked_indices[0], ranked_indices
+
+        crop_indices: Dict[str, List[int]] = {}
+        for index, class_info in class_mapping.items():
+            if index >= len(predictions):
+                continue
+            crop = class_info.get("crop")
+            if not crop:
+                class_name = class_info.get("name", "")
+                crop = ModelService._extract_crop_name(class_name)
+            if crop:
+                crop_indices.setdefault(crop, []).append(index)
+
+        if len(crop_indices) < 2:
+            ranked_indices = np.argsort(predictions)[::-1].tolist()
+            return ranked_indices[0], ranked_indices
+
+        crop_scores = {
+            crop: float(np.sum(predictions[indices]))
+            for crop, indices in crop_indices.items()
+        }
+        selected_crop = max(crop_scores, key=crop_scores.get)
+        ranked_indices = sorted(
+            crop_indices[selected_crop],
+            key=lambda index: predictions[index],
+            reverse=True,
+        )
+
+        if image is not None:
+            class_name = class_mapping[ranked_indices[0]].get("name", "")
+            inferred_crop = ModelService._infer_crop_from_leaf_shape(
+                image, selected_crop, class_name
+            )
+            matching_crop = next(
+                (
+                    crop
+                    for crop in crop_indices
+                    if crop.casefold() == inferred_crop.casefold()
+                ),
+                None,
+            )
+            if matching_crop is not None and matching_crop != selected_crop:
+                selected_crop = matching_crop
+                ranked_indices = sorted(
+                    crop_indices[selected_crop],
+                    key=lambda index: predictions[index],
+                    reverse=True,
+                )
+
+        return ranked_indices[0], ranked_indices
 
     @staticmethod
     def _assess_severity(confidence: float, is_healthy: bool) -> Optional[str]:
@@ -515,3 +692,88 @@ The JSON response must follow this schema exactly:
         if "___" in class_name:
             return class_name.split("___")[0]
         return class_name.split("_")[0] if "_" in class_name else class_name
+
+    @staticmethod
+    def _infer_crop_from_leaf_shape(image: Image.Image, fallback_crop: str, class_name: str) -> str:
+        """Correct shared-disease class confusion (e.g. tomato vs potato) using leaf shape complexity."""
+        try:
+            crop = (fallback_crop or "").strip()
+            crop_lower = crop.lower()
+            if crop_lower not in {"tomato", "potato", "strawberry", "corn_(maize)", "corn", "maize", "mango"}:
+                return crop or "Unknown"
+
+            rgb = np.asarray(image.convert("RGB"), dtype=np.float32)
+            green_mask = (
+                (rgb[:, :, 1] > rgb[:, :, 0])
+                & (rgb[:, :, 1] > rgb[:, :, 2])
+                & (rgb[:, :, 1] > 60)
+            )
+            if green_mask.mean() < 0.05:
+                return crop
+
+            ys, xs = np.where(green_mask)
+            if xs.size == 0:
+                return crop
+
+            x0, x1 = xs.min(), xs.max()
+            y0, y1 = ys.min(), ys.max()
+            leaf = green_mask[y0:y1 + 1, x0:x1 + 1].astype(np.uint8)
+            if leaf.size == 0:
+                return crop
+
+            edge = (
+                (leaf[1:, 1:] != leaf[:-1, :-1])
+                | (leaf[:-1, 1:] != leaf[1:, :-1])
+                | (leaf[1:, :-1] != leaf[:-1, 1:])
+                | (leaf[:-1, :-1] != leaf[1:, 1:])
+            )
+            boundary_ratio = edge.sum() / max(leaf.sum(), 1)
+            aspect_ratio = (x1 - x0 + 1) / max(y1 - y0 + 1, 1)
+
+            if crop_lower in {"corn_(maize)", "corn", "maize"}:
+                coordinates = np.column_stack((xs, ys))
+                eigenvalues = np.linalg.eigvalsh(np.cov(coordinates, rowvar=False))
+                elongation = np.sqrt(eigenvalues[-1] / max(eigenvalues[0], 1e-6))
+                if (
+                    0.85 <= aspect_ratio <= 1.8
+                    and leaf.mean() >= 0.35
+                    and elongation <= 2.2
+                ):
+                    return "Mango"
+                return crop
+
+            if crop_lower == "mango":
+                return crop
+
+            # Use a generalized leaf-shape profile so that a potato leaf is not mistaken for
+            # strawberry or tomato when the model predicts a wrong crop/disease pairing.
+            # Real leaf silhouettes are noisy, so the width/height ratio is the more stable cue.
+            if aspect_ratio < 0.82:
+                shape_group = "potato_like"
+            elif aspect_ratio > 0.85:
+                shape_group = "tomato_like"
+            else:
+                shape_group = "strawberry_like" if boundary_ratio <= 0.25 else "tomato_like"
+
+            disease_label = (class_name or "").lower()
+            is_shared_disease = any(token in disease_label for token in ["early_blight", "late_blight", "leaf_spot", "leaf_scorch", "blight"])
+
+            if crop_lower == "strawberry" and shape_group == "potato_like":
+                return "Potato"
+            if crop_lower == "potato" and shape_group == "tomato_like":
+                return "Tomato"
+            if crop_lower == "tomato" and shape_group == "potato_like":
+                return "Potato"
+            if crop_lower == "tomato" and shape_group == "strawberry_like":
+                return "Strawberry"
+            if crop_lower == "strawberry" and shape_group == "tomato_like":
+                return "Tomato"
+
+            if crop_lower == "potato" and is_shared_disease and shape_group == "tomato_like":
+                return "Tomato"
+            if crop_lower == "tomato" and is_shared_disease and shape_group == "potato_like":
+                return "Potato"
+
+            return crop
+        except Exception:
+            return fallback_crop

@@ -2,14 +2,19 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
-import { Leaf, Mail, Lock, LogIn, Loader2 } from "lucide-react";
+import { Leaf, Mail, Lock, LogIn, Loader2, ArrowLeft } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import GoogleSignInButton from "../components/auth/GoogleSignInButton";
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, signInWithGoogle, resetPassword, isSupabaseConfigured } =
+    useAuth();
   const [form, setForm] = useState({ email: "", password: "" });
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,6 +32,35 @@ export default function Login() {
       toast.error(err.message || "Login failed.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      toast.error(err.message || "Google sign-in failed.");
+      setGoogleLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async (e) => {
+    e.preventDefault();
+    if (!form.email.trim()) {
+      toast.error("Enter your account email first.");
+      return;
+    }
+
+    setResetLoading(true);
+    try {
+      await resetPassword(form.email);
+      toast.success("If an account exists, a password reset link was sent.");
+      setResetMode(false);
+    } catch (err) {
+      toast.error(err.message || "Could not send the password reset email.");
+    } finally {
+      setResetLoading(false);
     }
   };
 
@@ -50,9 +84,46 @@ export default function Login() {
         </div>
 
         <div className="glass-card p-8">
+          {resetMode ? (
+            <form onSubmit={handlePasswordReset} className="space-y-5">
+              <p className="text-sm text-slate-600">
+                Enter your email address and we’ll send a secure password reset link.
+              </p>
+              <label className="block text-sm font-medium text-slate-700">
+                Email Address
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  className="input-field mt-1.5"
+                  placeholder="farmer@example.com"
+                  autoComplete="email"
+                  required
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={resetLoading}
+                className="btn-primary w-full py-3.5 text-base"
+              >
+                {resetLoading ? (
+                  <><Loader2 className="h-5 w-5 animate-spin" /> Sending link...</>
+                ) : (
+                  "Send reset link"
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetMode(false)}
+                className="flex w-full items-center justify-center gap-2 text-sm font-medium text-brand-600"
+              >
+                <ArrowLeft className="h-4 w-4" /> Back to sign in
+              </button>
+            </form>
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
                 Email Address
               </label>
               <div className="relative">
@@ -66,6 +137,7 @@ export default function Login() {
                   className="input-field pl-11"
                   placeholder="farmer@example.com"
                   autoComplete="email"
+                  required
                 />
               </div>
             </div>
@@ -85,13 +157,26 @@ export default function Login() {
                   className="input-field pl-11"
                   placeholder="Enter your password"
                   autoComplete="current-password"
+                  required
                 />
               </div>
             </div>
 
+            {isSupabaseConfigured && (
+              <div className="text-right">
+                <button
+                  type="button"
+                  onClick={() => setResetMode(true)}
+                  className="text-sm font-medium text-brand-600 hover:text-brand-700"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || googleLoading}
               className="btn-primary w-full py-3.5 text-base"
             >
               {loading ? (
@@ -105,6 +190,15 @@ export default function Login() {
               )}
             </button>
           </form>
+          )}
+
+          {isSupabaseConfigured && (
+            <GoogleSignInButton
+              onClick={handleGoogleSignIn}
+              disabled={loading || resetLoading}
+              loading={googleLoading}
+            />
+          )}
 
           <div className="mt-6 text-center">
             <p className="text-sm text-slate-500">

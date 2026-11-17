@@ -18,7 +18,7 @@ import { useAuth } from "../context/AuthContext";
 import api from "../services/api";
 
 export default function History() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, isGuestPreview, loading: authLoading } = useAuth();
   const [history, setHistory] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -28,13 +28,13 @@ export default function History() {
 
   useEffect(() => {
     if (!authLoading) {
-      if (isAuthenticated) {
+      if (isAuthenticated || isGuestPreview) {
         fetchHistory();
       } else {
         setLoading(false);
       }
     }
-  }, [isAuthenticated, page, authLoading]);
+  }, [isAuthenticated, isGuestPreview, page, authLoading]);
 
   const fetchHistory = async () => {
     setLoading(true);
@@ -59,7 +59,7 @@ export default function History() {
     );
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !isGuestPreview) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
         <motion.div

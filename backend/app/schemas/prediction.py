@@ -53,6 +53,9 @@ class PredictionData(BaseModel):
     processing_time_ms: float = Field(
         ..., description="Total processing time in milliseconds"
     )
+    model_version: Optional[str] = Field(
+        None, description="Inference provider or local model version"
+    )
 
 
 class PredictionRequest(BaseModel):

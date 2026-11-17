@@ -11,10 +11,9 @@ Usage:
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
+from typing import Tuple
 
-import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
@@ -23,7 +22,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Constants
-IMAGE_SIZE = 224
+# Match the actual trained model input size to avoid mis-sizing and poor accuracy.
+IMAGE_SIZE = 160
 BATCH_SIZE = 32
 AUTOTUNE = tf.data.AUTOTUNE
 
@@ -43,7 +43,7 @@ def build_data_augmentation() -> keras.Sequential:
     )
 
 
-def build_model(num_classes: int, fine_tune_layers: int = 20) -> keras.Model:
+def build_model(num_classes: int) -> Tuple[keras.Model, keras.Model]:
     """
     Build the transfer learning model.
 
@@ -132,6 +132,7 @@ def train(
     learning_rate: float = 1e-3,
     fine_tune_lr: float = 1e-5,
     output_dir: str = "ml/models",
+    fine_tune_layers: int = 20,
 ):
     """Full training pipeline."""
     # --- Load data ---
@@ -140,6 +141,12 @@ def train(
     # --- Build model ---
     logger.info("Building model...")
     model, base_model = build_model(num_classes)
+    if not 1 <= fine_tune_layers <= len(base_model.layers):
+        raise ValueError(
+            f"fine_tune_layers must be between 1 and {len(base_model.layers)}."
+        )
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     # --- Phase 1: Train classifier head (frozen base) ---
     logger.info("Phase 1: Training classifier head (base frozen)...")
@@ -164,7 +171,7 @@ def train(
             verbose=1,
         ),
         keras.callbacks.ModelCheckpoint(
-            filepath=os.path.join(output_dir, "best_model.keras"),
+            filepath=str(output_path / "best_model.keras"),
             monitor="val_accuracy",
             save_best_only=True,
             verbose=1,
@@ -179,11 +186,14 @@ def train(
     )
 
     # --- Phase 2: Fine-tune top layers of base model ---
-    logger.info(f"Phase 2: Fine-tuning last {fine_tune_epochs} layers...")
+    logger.info(
+        f"Phase 2: Fine-tuning last {fine_tune_layers} base-model layers "
+        f"for up to {fine_tune_epochs} epochs..."
+    )
     base_model.trainable = True
 
     # Freeze all layers except the last N
-    for layer in base_model.layers[:-fine_tune_epochs]:
+    for layer in base_model.layers[:-fine_tune_layers]:
         layer.trainable = False
 
     model.compile(
@@ -199,19 +209,16 @@ def train(
         callbacks=callbacks,
     )
 
-    # --- Save model ---
-    os.makedirs(output_dir, exist_ok=True)
-    model_path = os.path.join(output_dir, "crop_disease_model.h5")
-    model.save(model_path)
-    logger.info(f"Model saved to: {model_path}")
+    model_path = output_path / "best_model.keras"
+    logger.info(f"Best validation model saved to: {model_path}")
 
     # --- Save class mapping ---
     class_mapping = {
         i: {"name": name, "crop": name.split("___")[0] if "___" in name else name}
         for i, name in enumerate(class_names)
     }
-    mapping_path = "data/class_mapping.json"
-    with open(mapping_path, "w") as f:
+    mapping_path = Path(__file__).resolve().parents[1] / "data" / "class_mapping.json"
+    with open(mapping_path, "w", encoding="utf-8") as f:
         json.dump(class_mapping, f, indent=2)
     logger.info(f"Class mapping saved to: {mapping_path}")
 
@@ -249,6 +256,12 @@ def main():
         "--fine-tune-lr", type=float, default=1e-5, help="Fine-tuning learning rate"
     )
     parser.add_argument(
+        "--fine-tune-layers",
+        type=int,
+        default=20,
+        help="Number of MobileNetV2 base layers to unfreeze during fine-tuning",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default="ml/models",
@@ -264,6 +277,7 @@ def main():
         learning_rate=args.lr,
         fine_tune_lr=args.fine_tune_lr,
         output_dir=args.output_dir,
+        fine_tune_layers=args.fine_tune_layers,
     )
 
 

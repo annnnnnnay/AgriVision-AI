@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import toast from "react-hot-toast";
 import {
   User,
   Mail,
@@ -35,16 +36,16 @@ const cardVariants = {
 };
 
 export default function Profile() {
-  const { user, isAuthenticated, loading: authLoading, logout } = useAuth();
+  const { user, isAuthenticated, isGuestPreview, loading: authLoading, logout } = useAuth();
   const navigate = useNavigate();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
+    if (!authLoading && !isAuthenticated && !isGuestPreview) {
       navigate("/auth/login");
     }
-  }, [isAuthenticated, authLoading, navigate]);
+  }, [isAuthenticated, isGuestPreview, authLoading, navigate]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -63,15 +64,31 @@ export default function Profile() {
     }
   };
 
-  const handleLogout = () => {
-    logout();
-    navigate("/");
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate("/");
+    } catch (error) {
+      toast.error(error.message || "Could not sign out. Please try again.");
+    }
   };
 
   if (authLoading || (loading && isAuthenticated)) {
     return (
       <div className="min-h-[80vh] flex items-center justify-center bg-slate-50">
         <Loader2 className="w-8 h-8 text-brand-600 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated && isGuestPreview) {
+    return (
+      <div className="min-h-[80vh] flex items-center justify-center bg-slate-50 px-4">
+        <div className="text-center">
+          <User className="w-12 h-12 text-brand-600 mx-auto mb-4" />
+          <h1 className="font-display text-2xl font-bold text-slate-900">Guest preview</h1>
+          <p className="text-slate-500 mt-2">Personal profile details require a signed-in account.</p>
+        </div>
       </div>
     );
   }

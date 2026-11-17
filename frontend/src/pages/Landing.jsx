@@ -23,17 +23,17 @@ const fadeUp = {
 };
 
 const stats = [
-  { value: "Universal", label: "Crops Supported" },
-  { value: "Zero-Shot", label: "Diseases Detected" },
-  { value: "95.85%", label: "Local Accuracy" },
-  { value: "100%", label: "Uptime (Hybrid Cascade)" },
+  { value: "3", label: "Inference Tiers" },
+  { value: "46", label: "Local Leaf Classes" },
+  { value: "15", label: "Mapped Crops" },
+  { value: "3", label: "Languages" },
 ];
 
 const features = [
   {
     icon: ScanLine,
     title: "Instant Detection",
-    desc: "Upload a leaf photo and get disease diagnosis in under 2 seconds.",
+    desc: "Upload a leaf photo for AI-assisted disease screening.",
     color: "text-brand-600 bg-brand-50",
   },
   {
@@ -51,7 +51,7 @@ const features = [
   {
     icon: Zap,
     title: "Powered by AI",
-    desc: "Built on Google Gemini 2.5 Flash API with local model fallback.",
+    desc: "Built on Google Gemini 3.8 Flash vision with a leaf-only local fallback.",
     color: "text-purple-600 bg-purple-50",
   },
 ];

@@ -17,9 +17,10 @@ export default function Footer() {
               </span>
             </div>
             <p className="text-sm leading-relaxed max-w-md">
-              AI-powered crop disease detection built for Indian farmers.
-              Upload a leaf photo, get instant diagnosis with treatment
-              recommendations in English, Hindi, and Marathi.
+              Crop disease screening built for Indian farmers. Cloud vision
+              analyzes plant images; the local fallback supports leaf photos
+              only. Treatment information is available in English, Hindi, and
+              Marathi.
             </p>
             <div className="flex items-center gap-3 mt-4">
               <a

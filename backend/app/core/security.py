@@ -10,6 +10,7 @@ import bcrypt
 import jwt
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.core.exceptions import UnauthorizedException
@@ -56,19 +57,41 @@ def decode_access_token(token: str) -> Optional[dict]:
 
 
 async def get_current_user_optional(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
 ) -> Optional[dict]:
-    """Extract user from token — returns None if no token or invalid."""
+    """Validate a legacy app token or a Supabase Auth access token."""
     if not credentials:
         return None
-    payload = decode_access_token(credentials.credentials)
-    return payload
+
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if payload:
+        return payload
+
+    supabase_service = getattr(request.app.state, "supabase_service", None)
+    if supabase_service is not None:
+        user = await run_in_threadpool(
+            supabase_service.get_authenticated_user, token
+        )
+        if user:
+            return user
+
+    raise UnauthorizedException("Invalid or expired authentication token.")
 
 
 async def get_current_user(
+    request: Request,
     user: Optional[dict] = Depends(get_current_user_optional),
 ) -> dict:
     """Extract user from token — raises 401 if not authenticated."""
+    supabase_service = getattr(request.app.state, "supabase_service", None)
+    if (
+        not user
+        and settings.LOCAL_DEMO_MODE
+        and not getattr(supabase_service, "auth_enabled", False)
+    ):
+        return {"sub": "local-demo", "email": "local@agrivision.local"}
     if not user:
         raise UnauthorizedException("Authentication required. Please log in.")
     return user

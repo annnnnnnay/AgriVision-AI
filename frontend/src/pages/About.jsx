@@ -1,11 +1,9 @@
 import { motion } from "framer-motion";
 import {
-  Leaf,
   Github,
   ExternalLink,
   Cpu,
   Server,
-  Database,
   Cloud,
   Layers,
 } from "lucide-react";
@@ -24,9 +22,9 @@ const techStack = [
     category: "AI & Machine Learning",
     icon: Cpu,
     items: [
-      { name: "Gemini 2.5 Flash", desc: "Primary universal Vision API" },
-      { name: "OpenRouter Vision", desc: "Secondary universal fallback API" },
-      { name: "MobileNetV2 (Keras)", desc: "Offline 46-class TF classifier" },
+      { name: "Gemini 3.8 Flash", desc: "Primary cloud vision provider" },
+      { name: "OpenRouter Vision", desc: "Secondary cloud vision provider" },
+      { name: "MobileNetV2 (Keras)", desc: "Offline, leaf-only 46-class classifier" },
     ],
   },
   {
@@ -90,17 +88,17 @@ export default function About() {
             diseases. Farmers in rural areas lack access to timely diagnosis
             and expert advice. AgriVision AI bridges this gap by putting the
             power of artificial intelligence in every farmer's pocket. Our 
-            three-tier hybrid architecture ensures 100% availability by cascading 
-            from state-of-the-art vision models to an offline-capable classifier.
+            three-tier hybrid architecture tries configured cloud vision providers
+            before falling back to an offline leaf classifier.
           </p>
           <div className="grid sm:grid-cols-3 gap-4 mt-6">
             <div className="text-center p-4 bg-brand-50 rounded-xl">
-              <p className="text-2xl font-bold text-brand-700">Universal</p>
-              <p className="text-sm text-brand-600">Crops Supported</p>
+              <p className="text-2xl font-bold text-brand-700">46</p>
+              <p className="text-sm text-brand-600">Local Leaf Classes</p>
             </div>
             <div className="text-center p-4 bg-brand-50 rounded-xl">
-              <p className="text-2xl font-bold text-brand-700">Zero-Shot</p>
-              <p className="text-sm text-brand-600">Diseases Detected</p>
+              <p className="text-2xl font-bold text-brand-700">3</p>
+              <p className="text-sm text-brand-600">Inference Tiers</p>
             </div>
             <div className="text-center p-4 bg-brand-50 rounded-xl">
               <p className="text-2xl font-bold text-brand-700">3</p>
@@ -169,18 +167,18 @@ export default function About() {
             🧠 System Architecture (3-Tier Cascade)
           </h2>
           <div className="font-mono text-xs bg-slate-900 text-emerald-400 p-6 rounded-xl overflow-x-auto leading-relaxed">
-            <pre>{`Input Image (Uploaded crop leaf, fruit, or vegetable)
+            <pre>{`Input Image + optional part/crop hint
                   ↓
-       [Tier 1: Direct Gemini 2.5 Flash API] ──► (Succeeds) ──► Universal Diagnosis (JSON)
+       [Tier 1: Direct Gemini 3.8 Flash API] ──► (Accepted result) ──► Diagnosis (JSON)
                   ↓ (Fails / Rate Limit)
-       [Tier 2: OpenRouter API Gateway]      ──► (Succeeds) ──► Universal Diagnosis (JSON)
+       [Tier 2: OpenRouter API Gateway]      ──► (Accepted result) ──► Diagnosis (JSON)
                   ↓ (Fails / Offline)
-       [Tier 3: Local MobileNetV2 Model]     ──► (Classifies) ──► 46-Class Model (Acc: 95.85%)
-                  ↓
-       [Dynamic Local Fallback / KB Lookup]  ──► Offline Rule-Based Local Diagnosis`}</pre>
+       [Tier 3: Local MobileNetV2 Model]     ──► Leaf selected only ──► 46 leaf classes
+                  ↓ (Low confidence / non-leaf)
+                  Decline instead of guessing`}</pre>
           </div>
           <p className="text-sm text-slate-500 mt-4">
-            Our hybrid architecture combines state-of-the-art Large Vision Models with highly optimized local deep learning. If your direct API quota runs out, the system automatically falls back to OpenRouter. If internet connection is completely lost, it leverages a fine-tuned 46-class MobileNetV2 model running locally on CPU.
+            Cloud vision providers are attempted first. The bundled local model is trained on leaf-disease classes only and is used only when Leaf is selected; it declines low-confidence predictions and never substitutes a leaf label for a fruit or unspecified image.
           </p>
         </motion.div>
 

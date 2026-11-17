@@ -123,8 +123,29 @@ async def get_profile(request: Request, current_user: dict = Depends(get_current
     user_id = current_user["sub"]
 
     user = await supabase_service.get_user_by_id(user_id)
-    if not user:
-        raise ValidationException("User not found.")
+    if user:
+        profile_data = {
+            "id": str(user["id"]),
+            "name": user["name"],
+            "email": user["email"],
+            "location": user.get("location"),
+            "created_at": user.get("created_at"),
+        }
+    else:
+        metadata = current_user.get("user_metadata") or {}
+        email = current_user.get("email") or ""
+        profile_data = {
+            "id": user_id,
+            "name": (
+                metadata.get("full_name")
+                or metadata.get("name")
+                or email.partition("@")[0]
+                or "Farmer"
+            ),
+            "email": email,
+            "location": metadata.get("location"),
+            "created_at": current_user.get("created_at"),
+        }
 
     # Count total predictions
     total_predictions = 0
@@ -141,11 +162,7 @@ async def get_profile(request: Request, current_user: dict = Depends(get_current
             pass
 
     profile = UserProfile(
-        id=str(user["id"]),
-        name=user["name"],
-        email=user["email"],
-        location=user.get("location"),
-        created_at=user.get("created_at"),
+        **profile_data,
         total_predictions=total_predictions,
     )
 

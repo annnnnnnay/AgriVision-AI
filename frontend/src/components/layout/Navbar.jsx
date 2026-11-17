@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
+import toast from "react-hot-toast";
 import {
   Menu,
   X,
@@ -29,9 +30,13 @@ export default function Navbar() {
   const navigate = useNavigate();
   const { isAuthenticated, user, logout, loading } = useAuth();
 
-  const handleLogout = () => {
-    logout();
-    navigate("/");
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate("/");
+    } catch (error) {
+      toast.error(error.message || "Could not sign out. Please try again.");
+    }
   };
 
   return (

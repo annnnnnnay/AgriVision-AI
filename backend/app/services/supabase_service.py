@@ -16,7 +16,10 @@ class SupabaseService:
 
     def __init__(self):
         self._client = None
+        self._auth_client = None
         self._is_configured = False
+        self._local_predictions: List[Dict[str, Any]] = []
+        self._local_users: Dict[str, Dict[str, Any]] = {}
         self._init_client()
 
     def _init_client(self) -> None:
@@ -36,15 +39,53 @@ class SupabaseService:
 
         try:
             from supabase import create_client, Client
-            self._client: Client = create_client(supabase_url, supabase_key)
+            self._auth_client: Client = create_client(supabase_url, supabase_key)
+            if settings.LOCAL_DEMO_MODE:
+                logger.info(
+                    "Local demo mode enabled; Supabase Auth token validation is available, "
+                    "but database persistence is disabled."
+                )
+                return
+
+            self._client = self._auth_client
             self._is_configured = True
             logger.info("Supabase client initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to initialize Supabase client: {e}")
 
+    def get_authenticated_user(self, access_token: str) -> Optional[Dict[str, Any]]:
+        """Validate a Supabase access token and return its user identity."""
+        if self._auth_client is None:
+            return None
+
+        try:
+            response = self._auth_client.auth.get_user(access_token)
+            user = response.user
+            if user is None:
+                return None
+
+            metadata = getattr(user, "user_metadata", None) or {}
+            return {
+                "sub": str(user.id),
+                "email": user.email,
+                "user_metadata": metadata,
+                "created_at": (
+                    user.created_at.isoformat()
+                    if hasattr(user.created_at, "isoformat")
+                    else user.created_at
+                ),
+            }
+        except Exception as e:
+            logger.info("Supabase access-token validation failed: %s", e)
+            return None
+
     @property
     def is_configured(self) -> bool:
         return self._is_configured
+
+    @property
+    def auth_enabled(self) -> bool:
+        return self._auth_client is not None
 
     # ============================================================
     # PREDICTION HISTORY
@@ -58,7 +99,24 @@ class SupabaseService:
     ) -> Optional[Dict]:
         """Save a prediction result to the database."""
         if not self._is_configured:
-            return None
+            record = {
+                "id": str(uuid4()),
+                "user_id": user_id,
+                "disease": prediction_data.get("disease"),
+                "disease_id": prediction_data.get("disease_id"),
+                "crop": prediction_data.get("crop"),
+                "confidence": prediction_data.get("confidence"),
+                "severity": prediction_data.get("severity"),
+                "is_healthy": prediction_data.get("is_healthy"),
+                "language": prediction_data.get("language", "en"),
+                "processing_time_ms": prediction_data.get("processing_time_ms"),
+                "image_url": image_url,
+                "top_predictions": prediction_data.get("top_predictions"),
+                "disease_info": prediction_data.get("disease_info"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._local_predictions.insert(0, record)
+            return record
 
         try:
             record = {
@@ -93,7 +151,15 @@ class SupabaseService:
     ) -> Dict:
         """Get prediction history for a user."""
         if not self._is_configured:
-            return {"predictions": [], "total": 0, "has_more": False}
+            predictions = [
+                record for record in self._local_predictions
+                if record.get("user_id") == user_id
+            ]
+            return {
+                "predictions": predictions[offset:offset + limit],
+                "total": len(predictions),
+                "has_more": offset + limit < len(predictions),
+            }
 
         try:
             # Get total count
@@ -130,19 +196,20 @@ class SupabaseService:
 
     async def get_user_analytics(self, user_id: str) -> Dict:
         """Get analytics data for a user."""
-        if not self._is_configured:
-            return self._empty_analytics()
-
         try:
-            # Get all predictions for user
-            result = (
-                self._client.table("predictions")
-                .select("disease, crop, severity, is_healthy, created_at")
-                .eq("user_id", user_id)
-                .execute()
-            )
-
-            predictions = result.data or []
+            if self._is_configured:
+                result = (
+                    self._client.table("predictions")
+                    .select("disease, crop, severity, is_healthy, created_at")
+                    .eq("user_id", user_id)
+                    .execute()
+                )
+                predictions = result.data or []
+            else:
+                predictions = [
+                    record for record in self._local_predictions
+                    if record.get("user_id") == user_id
+                ]
             if not predictions:
                 return self._empty_analytics()
 
@@ -247,7 +314,7 @@ class SupabaseService:
     ) -> Optional[Dict]:
         """Create a new user profile record."""
         if not self._is_configured:
-            return {
+            record = {
                 "id": str(uuid4())[:12],
                 "name": name,
                 "email": email,
@@ -255,6 +322,8 @@ class SupabaseService:
                 "location": location,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            self._local_users[record["id"]] = record
+            return record
 
         try:
             record = {
@@ -273,7 +342,10 @@ class SupabaseService:
     async def get_user_by_email(self, email: str) -> Optional[Dict]:
         """Retrieve user profile by email."""
         if not self._is_configured:
-            return None
+            return next(
+                (user for user in self._local_users.values() if user["email"].lower() == email.lower()),
+                None,
+            )
 
         try:
             result = (
@@ -290,7 +362,7 @@ class SupabaseService:
     async def get_user_by_id(self, user_id: str) -> Optional[Dict]:
         """Retrieve user profile by ID."""
         if not self._is_configured:
-            return None
+            return self._local_users.get(user_id)
 
         try:
             result = (

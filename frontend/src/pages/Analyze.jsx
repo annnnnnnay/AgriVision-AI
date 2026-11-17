@@ -11,7 +11,6 @@ import {
   XCircle,
   Leaf,
   ArrowLeft,
-  Download,
   Clock,
   Shield,
   Pill,
@@ -30,8 +29,15 @@ const LANGUAGES = [
   { code: "mr", label: "मराठी" },
 ];
 
+const IMAGE_TYPES = [
+  { value: "unknown", label: "Not sure" },
+  { value: "leaf", label: "Leaf" },
+  { value: "fruit", label: "Fruit" },
+  { value: "other", label: "Other" },
+];
+
 export default function Analyze() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, isGuestPreview, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [image, setImage] = useState(null);
@@ -39,6 +45,8 @@ export default function Analyze() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [language, setLanguage] = useState("en");
+  const [imageType, setImageType] = useState("unknown");
+  const [cropHint, setCropHint] = useState("");
   const [showFullInfo, setShowFullInfo] = useState(false);
 
   const onDrop = useCallback((acceptedFiles) => {
@@ -59,11 +67,11 @@ export default function Analyze() {
   });
 
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
+    if (!authLoading && !isAuthenticated && !isGuestPreview) {
       toast.error("Please sign in to analyze crop diseases.");
       navigate("/auth/login");
     }
-  }, [isAuthenticated, authLoading, navigate]);
+  }, [isAuthenticated, isGuestPreview, authLoading, navigate]);
 
   if (authLoading) {
     return (
@@ -78,7 +86,12 @@ export default function Analyze() {
     setLoading(true);
 
     try {
-      const data = await predictDisease(image, language);
+      const data = await predictDisease(
+        image,
+        language,
+        imageType,
+        cropHint
+      );
       setResult(data);
       toast.success("Analysis complete!");
     } catch (err) {
@@ -93,6 +106,8 @@ export default function Analyze() {
     setImagePreview(null);
     setResult(null);
     setShowFullInfo(false);
+    setImageType("unknown");
+    setCropHint("");
   };
 
   return (
@@ -108,14 +123,14 @@ export default function Analyze() {
             Crop Disease <span className="gradient-text">Detection</span>
           </h1>
           <p className="mt-2 text-slate-600">
-            Upload a clear photo of a crop leaf, fruit, or plant part for instant AI-powered diagnosis.
+            Upload a clear photo of a crop leaf, fruit, or plant part for AI-assisted diagnosis.
           </p>
           <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3">
             <Leaf className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-semibold text-emerald-800">Universal Hybrid AI Mode Active</p>
+              <p className="text-sm font-semibold text-emerald-800">Three-Tier Diagnosis</p>
               <p className="text-xs text-emerald-600 mt-0.5">
-                Our primary engine uses Gemini 2.5 Flash to support all plants, fruits, and vegetables (including leaves and fruits like Mangoes). It automatically falls back to our local TensorFlow failover model if the API quota is reached.
+                  Configured cloud vision providers receive the uploaded image and are tried first. The bundled 46-class local model is leaf-only and is used only when you select Leaf; fruit, other, and unspecified photos are never forced into a leaf-disease label.
               </p>
             </div>
           </div>
@@ -138,6 +153,51 @@ export default function Analyze() {
               {label}
             </button>
           ))}
+        </div>
+
+        <div className="mb-6 grid gap-4 sm:grid-cols-2">
+          <fieldset>
+            <legend className="mb-2 text-sm font-medium text-slate-700">
+              What does the photo show?
+            </legend>
+            <div className="flex flex-wrap gap-2">
+              {IMAGE_TYPES.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={imageType === value}
+                  onClick={() => setImageType(value)}
+                  className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                    imageType === value
+                      ? "bg-brand-600 text-white"
+                      : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <div>
+            <label
+              htmlFor="crop-hint"
+              className="mb-2 block text-sm font-medium text-slate-700"
+            >
+              Known crop (optional)
+            </label>
+            <input
+              id="crop-hint"
+              type="text"
+              value={cropHint}
+              onChange={(event) => setCropHint(event.target.value)}
+              placeholder="For example, Apple"
+              maxLength={40}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              A selected crop is checked against the result to prevent cross-crop labels.
+            </p>
+          </div>
         </div>
 
         <AnimatePresence mode="wait">
@@ -177,7 +237,7 @@ export default function Analyze() {
                   ) : (
                     <div className="text-center">
                       <p className="font-semibold text-slate-700">
-                        Drag & drop a leaf image here
+                        Drag & drop a plant image here
                       </p>
                       <p className="text-sm text-slate-500 mt-1">
                         or click to browse · JPG, PNG, WEBP · Max 10MB
@@ -194,7 +254,7 @@ export default function Analyze() {
                     <div className="relative flex-1 rounded-xl overflow-hidden bg-slate-100">
                       <img
                         src={imagePreview}
-                        alt="Leaf preview"
+                        alt="Plant image preview"
                         className="w-full h-full max-h-80 object-contain"
                       />
                       <button
@@ -228,7 +288,7 @@ export default function Analyze() {
                       ) : (
                         <>
                           <ScanLine className="w-5 h-5" />
-                          Analyze Leaf
+                          Analyze Image
                         </>
                       )}
                     </button>
@@ -265,7 +325,7 @@ export default function Analyze() {
                   <div className="glass-card p-4">
                     <img
                       src={imagePreview}
-                      alt="Analyzed leaf"
+                      alt="Analyzed plant image"
                       className="w-full rounded-xl max-h-64 object-contain bg-slate-50"
                     />
                   </div>
@@ -345,6 +405,15 @@ export default function Analyze() {
                             <Clock className="w-3 h-3" />
                             {result.data.processing_time_ms}ms
                           </span>
+                          {result.data.model_version && (
+                            <span>
+                              {result.data.model_version.startsWith("openrouter-")
+                                ? "OpenRouter · Tier 2"
+                                : result.data.model_version.startsWith("gemini-")
+                                  ? "Gemini · Tier 1"
+                                  : "Local leaf model · Tier 3"}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

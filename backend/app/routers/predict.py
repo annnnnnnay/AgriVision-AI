@@ -4,8 +4,10 @@ Prediction endpoints — the core of AgriVision AI.
 
 import logging
 from io import BytesIO
+from typing import Optional
 
 from fastapi import APIRouter, File, Form, Request, UploadFile, Depends
+from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.core.exceptions import PredictionException, ValidationException
@@ -27,12 +29,14 @@ settings = get_settings()
 @router.post("/predict", response_model=APIResponse[PredictionData])
 async def predict_disease(
     request: Request,
-    file: UploadFile = File(..., description="Crop leaf image (JPG, PNG, WEBP)"),
+    file: UploadFile = File(..., description="Crop image (JPG, PNG, WEBP)"),
     language: str = Form("en", description="Response language (en/hi/mr)"),
+    image_type: str = Form("unknown", description="Visible plant part: leaf/fruit/other/unknown"),
+    crop_hint: Optional[str] = Form(None, description="Known crop name, if available"),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Upload a crop leaf image and get instant disease diagnosis.
+    Upload a crop image and get a provider- and scope-checked disease diagnosis.
 
     Returns:
     - Disease name and confidence score
@@ -44,11 +48,19 @@ async def predict_disease(
     # --- Validate inputs ---
     _validate_file(file)
     lang = TranslationService.validate_language(language)
+    image_type = image_type.strip().lower()
+    if image_type not in {"leaf", "fruit", "other", "unknown"}:
+        raise ValidationException(
+            "Image type must be leaf, fruit, other, or unknown.",
+            field="image_type",
+        )
+    crop_hint = crop_hint.strip() if crop_hint and crop_hint.strip() else None
 
     # --- Read and validate image ---
     try:
-        contents = await file.read()
-        if len(contents) > settings.MAX_FILE_SIZE_MB * 1024 * 1024:
+        max_file_size = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+        contents = await file.read(max_file_size + 1)
+        if len(contents) > max_file_size:
             raise ValidationException(
                 f"File size exceeds {settings.MAX_FILE_SIZE_MB}MB limit.",
                 field="file",
@@ -65,7 +77,18 @@ async def predict_disease(
     # --- Run prediction ---
     try:
         model_service = request.app.state.model_service
-        prediction_result = model_service.predict(image, language=lang)
+        prediction_result = await run_in_threadpool(
+            model_service.predict,
+            image,
+            language=lang,
+            image_type=image_type,
+            crop_hint=crop_hint,
+        )
+    except ValueError as e:
+        raise ValidationException(str(e), field="crop_hint")
+    except RuntimeError as e:
+        logger.info("Prediction declined: %s", e)
+        raise PredictionException(str(e))
     except Exception as e:
         logger.error(f"Prediction failed: {e}", exc_info=True)
         raise PredictionException("Failed to process the image. Please try again.")
@@ -156,7 +179,7 @@ async def predict_disease(
     # --- Build response ---
     top_predictions = [
         TopPrediction(
-            disease=p["class"].replace("_", " ").replace("___", " — "),
+            disease=p["class"].replace("___", " — ").replace("_", " "),
             confidence=p["confidence"],
         )
         for p in prediction_result["top_predictions"]
@@ -173,6 +196,7 @@ async def predict_disease(
         disease_info=disease_info,
         language=lang,
         processing_time_ms=prediction_result["processing_time_ms"],
+        model_version=prediction_result.get("model_version"),
     )
 
     # --- Save prediction to database ---
@@ -215,7 +239,7 @@ async def predict_disease(
             f"time={prediction_result['processing_time_ms']}ms"
         )
     except Exception:
-        pass  # Don't fail prediction if storage fails
+        logger.exception("Failed to persist prediction history.")
 
     return APIResponse(
         success=True,

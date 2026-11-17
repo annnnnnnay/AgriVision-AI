@@ -26,6 +26,9 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("🌱 AgriVision AI starting up...")
 
+    if settings.LOCAL_DEMO_MODE and settings.ENVIRONMENT != "development":
+        raise RuntimeError("LOCAL_DEMO_MODE is only allowed in development.")
+
     # Enforce secure configurations in production
     if settings.ENVIRONMENT == "production":
         if settings.SECRET_KEY == "dev-secret-key-change-in-production":
@@ -43,8 +46,17 @@ async def lifespan(app: FastAPI):
     from app.services.model_service import ModelService
     model_service = ModelService()
     model_service.load_model()
+    if not model_service.is_loaded and not (
+        settings.GEMINI_API_KEY or settings.OPENROUTER_API_KEY
+    ):
+        raise RuntimeError(
+            "No local model or cloud inference API key is configured."
+        )
     app.state.model_service = model_service
-    logger.info("✅ ML model loaded successfully")
+    if model_service.is_loaded:
+        logger.info("✅ ML model loaded successfully")
+    else:
+        logger.warning("Local ML model is unavailable; prediction requires a cloud provider.")
 
     # Initialize disease knowledge base
     from app.services.disease_service import DiseaseService
