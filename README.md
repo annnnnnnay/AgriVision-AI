@@ -196,16 +196,22 @@ environment used by Docker Compose so they are available at frontend build time.
 Then run `docker compose up --build`. The frontend is served at
 http://localhost:3000 and proxies API requests to the backend.
 
-### 1. Backend (Render)
-- Deploy your `backend` directory to **Render Web Services**.
-- Since Render free tier offers 512MB RAM, set the environment variable:
-  `SKIP_TF_LOAD` = `true`
-  *This disables loading local TensorFlow into memory, keeping the server footprint under 80MB. The backend will route all predictions through Gemini Cloud API.*
-- Configure your `GEMINI_API_KEY`, `SUPABASE_URL`, and `SUPABASE_ANON_KEY`.
+### Vercel Services
 
-### 2. Frontend (Vercel)
-- Deploy your `frontend` directory to **Vercel**.
-- Add the `VITE_API_URL` pointing to your Render backend URL, and add the Supabase URL/key.
+The root `vercel.json` deploys the frontend and FastAPI backend as services in
+one Vercel project. `/api/*` is routed publicly to the backend; all other paths
+are routed publicly to the frontend. The browser calls the API through the
+same-origin `/api` paths, so no service bindings are needed.
+
+Configure these Vercel environment variables:
+
+- Backend: `ENVIRONMENT=production`, a random `SECRET_KEY` of at least 32
+  characters, `SKIP_TF_LOAD=true`, and at least one inference provider key
+  (`GEMINI_API_KEY` or `OPENROUTER_API_KEY`). Set `SUPABASE_URL` and
+  `SUPABASE_ANON_KEY` to enable Supabase authentication.
+- Frontend build: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+- Leave `VITE_API_URL` unset or empty; the frontend uses same-origin `/api`
+  requests through the public rewrite.
 
 ---
 
