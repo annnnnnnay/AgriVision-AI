@@ -275,26 +275,42 @@ class ModelService:
             }
 
             timeout = settings.PREDICTION_PROVIDER_TIMEOUT_SECONDS
-            res = httpx.post(url, headers=headers, json=payload, timeout=timeout)
-            if res.status_code in {400, 404}:
-                logger.warning(
-                    "OpenRouter model %s returned %d; trying Llama 3.2 Vision.",
-                    model_name,
-                    res.status_code,
-                )
-                payload["model"] = "meta-llama/llama-3.2-11b-vision-instruct"
+            fallback_model = "meta-llama/llama-3.2-11b-vision-instruct"
+            models_to_try = [model_name, fallback_model]
+            for attempt, candidate_model in enumerate(models_to_try):
+                payload["model"] = candidate_model
                 res = httpx.post(url, headers=headers, json=payload, timeout=timeout)
-            if res.status_code != 200:
-                logger.warning("OpenRouter request failed with status %d.", res.status_code)
+                if res.status_code in {400, 404} and attempt == 0:
+                    logger.warning(
+                        "OpenRouter model %s returned %d; trying Llama 3.2 Vision.",
+                        candidate_model,
+                        res.status_code,
+                    )
+                    continue
+                if res.status_code != 200:
+                    logger.warning(
+                        "OpenRouter request failed with status %d.", res.status_code
+                    )
+                    return None
+
+                response_data = res.json()
+                content_text = response_data["choices"][0]["message"]["content"]
+                try:
+                    data = json.loads(content_text.strip())
+                except json.JSONDecodeError:
+                    if attempt == 0:
+                        logger.warning(
+                            "OpenRouter model %s returned invalid JSON; "
+                            "trying Llama 3.2 Vision.",
+                            candidate_model,
+                        )
+                        continue
+                    raise
+                break
+            else:
                 return None
 
-            response_data = res.json()
-            
-            # Extract content
-            content_text = response_data["choices"][0]["message"]["content"]
             processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            
-            data = json.loads(content_text.strip())
             return self._build_vision_result(
                 data,
                 processing_time_ms,

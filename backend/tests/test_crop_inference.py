@@ -406,3 +406,68 @@ def test_openrouter_request_is_bounded_and_does_not_retry_server_errors(monkeypa
     assert len(requests) == 1
     assert requests[0]["timeout"] == timeout
     assert timeout <= 30
+
+
+def test_openrouter_retries_with_fallback_model_when_response_is_invalid_json(
+    monkeypatch,
+):
+    import httpx
+
+    responses = [
+        type(
+            "Response",
+            (),
+            {
+                "status_code": 200,
+                "json": lambda self: {
+                    "choices": [{"message": {"content": "not valid JSON"}}]
+                },
+            },
+        )(),
+        type(
+            "Response",
+            (),
+            {
+                "status_code": 200,
+                "json": lambda self: {
+                    "model": "meta-llama/llama-3.2-11b-vision-instruct",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "crop": "Banana",
+                                        "disease": "Anthracnose",
+                                        "confidence": 0.85,
+                                        "is_healthy": False,
+                                        "severity": "low",
+                                    }
+                                )
+                            }
+                        }
+                    ],
+                },
+            },
+        )(),
+    ]
+    requests = []
+
+    def fake_post(url, **kwargs):
+        requests.append(kwargs["json"]["model"])
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        "app.services.model_service.settings.OPENROUTER_API_KEY", "test-only-key"
+    )
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = ModelService().predict_openrouter(
+        Image.new("RGB", (16, 16)), image_type="fruit"
+    )
+
+    assert result["crop"] == "Banana"
+    assert len(requests) == 2
+    assert (
+        requests[0] == "google/gemini-3.8-flash"
+        and requests[1] == "meta-llama/llama-3.2-11b-vision-instruct"
+    )

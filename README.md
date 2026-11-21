@@ -213,6 +213,8 @@ Configure these Vercel environment variables:
   characters, `SKIP_TF_LOAD=true`, and at least one inference provider key
   (`GEMINI_API_KEY` or `OPENROUTER_API_KEY`). Set `SUPABASE_URL` and
   `SUPABASE_ANON_KEY` to enable Supabase authentication.
+- Create `GEMINI_API_KEY` in Google AI Studio. It is not the Google OAuth
+  client ID or client secret used for Supabase sign-in.
 - Frontend build: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 - Leave `VITE_API_URL` unset or empty; the frontend uses same-origin `/api`
   requests through the public rewrite.
