@@ -18,6 +18,7 @@ class SupabaseService:
         self._client = None
         self._auth_client = None
         self._is_configured = False
+        self._persistence_error: Optional[str] = None
         self._local_predictions: List[Dict[str, Any]] = []
         self._local_users: Dict[str, Dict[str, Any]] = {}
         self._init_client()
@@ -29,6 +30,7 @@ class SupabaseService:
 
         supabase_url = getattr(settings, "SUPABASE_URL", "") or ""
         supabase_key = getattr(settings, "SUPABASE_ANON_KEY", "") or ""
+        service_role_key = getattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "") or ""
 
         if not supabase_url or not supabase_key:
             logger.warning(
@@ -47,11 +49,23 @@ class SupabaseService:
                 )
                 return
 
-            self._client = self._auth_client
+            if not service_role_key:
+                self._persistence_error = (
+                    "SUPABASE_SERVICE_ROLE_KEY is required for server-side "
+                    "prediction history and image storage."
+                )
+                logger.warning(self._persistence_error)
+                return
+
+            self._client = create_client(supabase_url, service_role_key)
             self._is_configured = True
             logger.info("Supabase client initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to initialize Supabase client: {e}")
+
+    def _ensure_persistence_configured(self) -> None:
+        if self._persistence_error:
+            raise RuntimeError(self._persistence_error)
 
     def get_authenticated_user(self, access_token: str) -> Optional[Dict[str, Any]]:
         """Validate a Supabase access token and return its user identity."""
@@ -99,6 +113,7 @@ class SupabaseService:
     ) -> Optional[Dict]:
         """Save a prediction result to the database."""
         if not self._is_configured:
+            self._ensure_persistence_configured()
             record = {
                 "id": str(uuid4()),
                 "user_id": user_id,
@@ -151,6 +166,7 @@ class SupabaseService:
     ) -> Dict:
         """Get prediction history for a user."""
         if not self._is_configured:
+            self._ensure_persistence_configured()
             predictions = [
                 record for record in self._local_predictions
                 if record.get("user_id") == user_id
@@ -187,8 +203,8 @@ class SupabaseService:
                 "has_more": (offset + limit) < total,
             }
         except Exception as e:
-            logger.error(f"Failed to get prediction history: {e}")
-            return {"predictions": [], "total": 0, "has_more": False}
+            logger.exception("Failed to get prediction history: %s", e)
+            raise
 
     # ============================================================
     # ANALYTICS
@@ -196,6 +212,9 @@ class SupabaseService:
 
     async def get_user_analytics(self, user_id: str) -> Dict:
         """Get analytics data for a user."""
+        if not self._is_configured:
+            self._ensure_persistence_configured()
+
         try:
             if self._is_configured:
                 result = (
@@ -261,8 +280,8 @@ class SupabaseService:
                 "predictions_this_month": predictions_this_month,
             }
         except Exception as e:
-            logger.error(f"Failed to get analytics: {e}")
-            return self._empty_analytics()
+            logger.exception("Failed to get analytics: %s", e)
+            raise
 
     @staticmethod
     def _empty_analytics() -> Dict:

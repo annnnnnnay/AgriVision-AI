@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # --- Supabase ---
     SUPABASE_URL: str = ""
     SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
     OPENROUTER_API_KEY: str = ""

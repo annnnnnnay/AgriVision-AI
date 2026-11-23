@@ -22,6 +22,7 @@ export default function History() {
   const [history, setHistory] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [historyError, setHistoryError] = useState("");
   const [page, setPage] = useState(0);
   const [selectedItem, setSelectedItem] = useState(null);
   const limit = 10;
@@ -38,14 +39,16 @@ export default function History() {
 
   const fetchHistory = async () => {
     setLoading(true);
+    setHistoryError("");
     try {
       const response = await api.get("/api/v1/history", {
         params: { limit, offset: page * limit },
       });
       setHistory(response.data.data.predictions);
       setTotal(response.data.data.total);
-    } catch {
-      // Will show empty state
+    } catch (error) {
+      console.error("Failed to load prediction history:", error);
+      setHistoryError(error.message || "Could not load your analysis history.");
     } finally {
       setLoading(false);
     }
@@ -110,6 +113,17 @@ export default function History() {
         {loading ? (
           <div className="flex justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
+          </div>
+        ) : historyError ? (
+          <div className="glass-card p-12 text-center">
+            <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-4" />
+            <h3 className="font-display text-xl font-bold text-slate-700 mb-2">
+              Could not load history
+            </h3>
+            <p className="text-slate-500 mb-6">{historyError}</p>
+            <button onClick={fetchHistory} className="btn-primary">
+              Try again
+            </button>
           </div>
         ) : history.length > 0 ? (
           <>

@@ -142,7 +142,12 @@ npm run dev
 Email/password registration, email confirmation, Google OAuth, password reset,
 and API access-token validation use Supabase Auth. Configure the Supabase project
 URL and **publishable/anon** key in both `backend/.env` and `frontend/.env`.
-Never put a Supabase `service_role` key in the frontend.
+For server-side prediction history and image storage, configure
+`SUPABASE_SERVICE_ROLE_KEY` in the backend only. Never put a Supabase
+`service_role` key in the frontend. Run
+[`backend/supabase/migrations/001_initial_schema.sql`](./backend/supabase/migrations/001_initial_schema.sql)
+in the Supabase SQL Editor to create the predictions table and `crop-images`
+storage bucket.
 
 In Supabase Authentication → URL Configuration, set the local Site URL to
 `http://localhost:5176` and allow `http://localhost:5176/auth/callback`.
@@ -212,9 +217,12 @@ Configure these Vercel environment variables:
 - Backend: `ENVIRONMENT=production`, a random `SECRET_KEY` of at least 32
   characters, `SKIP_TF_LOAD=true`, and at least one inference provider key
   (`GEMINI_API_KEY` or `OPENROUTER_API_KEY`). Set `SUPABASE_URL` and
-  `SUPABASE_ANON_KEY` to enable Supabase authentication.
+  `SUPABASE_ANON_KEY` to enable Supabase authentication. Set
+  `SUPABASE_SERVICE_ROLE_KEY` for server-side history and image persistence.
 - Create `GEMINI_API_KEY` in Google AI Studio. It is not the Google OAuth
   client ID or client secret used for Supabase sign-in.
+- Run `backend/supabase/migrations/001_initial_schema.sql` in Supabase's SQL
+  Editor to create the history table and storage bucket.
 - Frontend build: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 - Leave `VITE_API_URL` unset or empty; the frontend uses same-origin `/api`
   requests through the public rewrite.

@@ -107,6 +107,53 @@ def test_supabase_auth_client_is_initialized_in_demo_mode(monkeypatch):
     assert service.is_configured is False
 
 
+def test_supabase_uses_service_role_for_database_client(monkeypatch):
+    settings = SimpleNamespace(
+        LOCAL_DEMO_MODE=False,
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_ANON_KEY="public-test-key",
+        SUPABASE_SERVICE_ROLE_KEY="server-test-key",
+    )
+    clients = []
+
+    def fake_create_client(url, key):
+        client = object()
+        clients.append((url, key, client))
+        return client
+
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("supabase.create_client", fake_create_client)
+
+    service = SupabaseService()
+
+    assert [client[1] for client in clients] == [
+        "public-test-key",
+        "server-test-key",
+    ]
+    assert service._auth_client is clients[0][2]
+    assert service._client is clients[1][2]
+    assert service.is_configured is True
+
+
+def test_supabase_persistence_requires_service_role_key(monkeypatch):
+    settings = SimpleNamespace(
+        LOCAL_DEMO_MODE=False,
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_ANON_KEY="public-test-key",
+        SUPABASE_SERVICE_ROLE_KEY="",
+    )
+    fake_client = object()
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    monkeypatch.setattr("supabase.create_client", lambda url, key: fake_client)
+
+    service = SupabaseService()
+
+    assert service._auth_client is fake_client
+    assert service._client is None
+    assert service.is_configured is False
+    assert "SUPABASE_SERVICE_ROLE_KEY" in service._persistence_error
+
+
 def test_supabase_profile_is_built_from_verified_auth_metadata():
     class LocalDemoSupabaseService:
         is_configured = False

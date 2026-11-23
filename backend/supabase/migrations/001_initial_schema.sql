@@ -28,23 +28,27 @@ CREATE INDEX IF NOT EXISTS idx_predictions_created_at ON predictions(created_at 
 -- Enable Row Level Security
 ALTER TABLE predictions ENABLE ROW LEVEL SECURITY;
 
--- Policy: Users can only read their own predictions
+-- Authenticated users can only read and insert their own predictions.
+DROP POLICY IF EXISTS "Users can view own predictions" ON predictions;
 CREATE POLICY "Users can view own predictions"
-  ON predictions FOR SELECT
-  USING (user_id = auth.uid()::text OR user_id IS NULL);
+  ON predictions FOR SELECT TO authenticated
+  USING (user_id = (SELECT auth.uid())::text);
 
--- Policy: Anyone can insert predictions (auth optional)
-CREATE POLICY "Anyone can insert predictions"
-  ON predictions FOR INSERT
-  WITH CHECK (true);
+DROP POLICY IF EXISTS "Anyone can insert predictions" ON predictions;
+DROP POLICY IF EXISTS "Users can insert own predictions" ON predictions;
+CREATE POLICY "Users can insert own predictions"
+  ON predictions FOR INSERT TO authenticated
+  WITH CHECK (user_id = (SELECT auth.uid())::text);
 
 -- ============================================================
 -- STORAGE BUCKET
 -- ============================================================
--- Create a storage bucket for crop images
--- Run in Supabase Dashboard → Storage → New Bucket
--- Name: crop-images
--- Public: Yes
+-- The backend uploads with its server-only service role key.
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('crop-images', 'crop-images', TRUE)
+ON CONFLICT (id) DO UPDATE SET public = EXCLUDED.public;
+
+NOTIFY pgrst, 'reload schema';
 
 -- ============================================================
 -- OPTIONAL: User profiles (if not using Supabase Auth)
