@@ -275,14 +275,14 @@ class ModelService:
             }
 
             timeout = settings.PREDICTION_PROVIDER_TIMEOUT_SECONDS
-            fallback_model = "meta-llama/llama-3.2-11b-vision-instruct"
+            fallback_model = "openrouter/free"
             models_to_try = [model_name, fallback_model]
             for attempt, candidate_model in enumerate(models_to_try):
                 payload["model"] = candidate_model
                 res = httpx.post(url, headers=headers, json=payload, timeout=timeout)
-                if res.status_code in {400, 404} and attempt == 0:
+                if res.status_code in {400, 402, 404} and attempt == 0:
                     logger.warning(
-                        "OpenRouter model %s returned %d; trying Llama 3.2 Vision.",
+                        "OpenRouter model %s returned %d; trying free vision routing.",
                         candidate_model,
                         res.status_code,
                     )
@@ -301,7 +301,7 @@ class ModelService:
                     if attempt == 0:
                         logger.warning(
                             "OpenRouter model %s returned invalid JSON; "
-                            "trying Llama 3.2 Vision.",
+                            "trying free vision routing.",
                             candidate_model,
                         )
                         continue

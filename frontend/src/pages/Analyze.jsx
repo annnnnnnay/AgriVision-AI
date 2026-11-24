@@ -45,7 +45,7 @@ export default function Analyze() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [language, setLanguage] = useState("en");
-  const [imageType, setImageType] = useState("unknown");
+  const [imageType, setImageType] = useState("leaf");
   const [cropHint, setCropHint] = useState("");
   const [showFullInfo, setShowFullInfo] = useState(false);
 
@@ -106,7 +106,7 @@ export default function Analyze() {
     setImagePreview(null);
     setResult(null);
     setShowFullInfo(false);
-    setImageType("unknown");
+    setImageType("leaf");
     setCropHint("");
   };
 

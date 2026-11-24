@@ -469,5 +469,57 @@ def test_openrouter_retries_with_fallback_model_when_response_is_invalid_json(
     assert len(requests) == 2
     assert (
         requests[0] == "google/gemini-3.8-flash"
-        and requests[1] == "meta-llama/llama-3.2-11b-vision-instruct"
+        and requests[1] == "openrouter/free"
     )
+
+
+def test_openrouter_retries_with_free_vision_router_after_payment_required(
+    monkeypatch,
+):
+    import httpx
+
+    responses = [
+        type("Response", (), {"status_code": 402})(),
+        type(
+            "Response",
+            (),
+            {
+                "status_code": 200,
+                "json": lambda self: {
+                    "model": "google/gemma-4-26b-a4b-it:free",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "crop": "Banana",
+                                        "disease": "Black Sigatoka",
+                                        "confidence": 0.87,
+                                        "is_healthy": False,
+                                        "severity": "moderate",
+                                    }
+                                )
+                            }
+                        }
+                    ],
+                },
+            },
+        )(),
+    ]
+    requested_models = []
+
+    def fake_post(url, **kwargs):
+        requested_models.append(kwargs["json"]["model"])
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        "app.services.model_service.settings.OPENROUTER_API_KEY", "test-only-key"
+    )
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = ModelService().predict_openrouter(
+        Image.new("RGB", (16, 16)), image_type="leaf"
+    )
+
+    assert result["crop"] == "Banana"
+    assert requested_models == ["google/gemini-3.8-flash", "openrouter/free"]
