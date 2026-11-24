@@ -219,6 +219,12 @@ Configure these Vercel environment variables:
   (`GEMINI_API_KEY` or `OPENROUTER_API_KEY`). Set `SUPABASE_URL` and
   `SUPABASE_ANON_KEY` to enable Supabase authentication. Set
   `SUPABASE_SERVICE_ROLE_KEY` for server-side history and image persistence.
+- To enable limited guest analysis, set backend `ENABLE_GUEST_ANALYSIS=true`
+  and frontend build `VITE_ENABLE_GUEST_DEMO=true`. Guests may analyze up to
+  `GUEST_ANALYSIS_LIMIT_PER_HOUR` images per IP (default 3); guest results are
+  not stored and do not appear in history. Configure a persistent rate-limit
+  storage URI or Vercel Firewall rate limit before broad public use; the
+  default in-memory limiter is best-effort across serverless instances.
 - Create `GEMINI_API_KEY` in Google AI Studio. It is not the Google OAuth
   client ID or client secret used for Supabase sign-in.
 - Run `backend/supabase/migrations/001_initial_schema.sql` in Supabase's SQL

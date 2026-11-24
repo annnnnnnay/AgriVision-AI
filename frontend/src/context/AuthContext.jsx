@@ -222,7 +222,9 @@ export function AuthProvider({ children }) {
       token,
       loading,
       isAuthenticated: !!user,
-      isGuestPreview: !supabase && import.meta.env.DEV,
+      isGuestPreview:
+        (!supabase && import.meta.env.DEV) ||
+        (!user && import.meta.env.VITE_ENABLE_GUEST_DEMO === "true"),
       isSupabaseConfigured: !!supabase,
       login,
       register,

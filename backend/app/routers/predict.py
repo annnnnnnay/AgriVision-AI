@@ -10,8 +10,13 @@ from fastapi import APIRouter, File, Form, Request, UploadFile, Depends
 from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
-from app.core.exceptions import PredictionException, ValidationException
-from app.core.security import get_current_user
+from app.core.exceptions import (
+    PredictionException,
+    UnauthorizedException,
+    ValidationException,
+)
+from app.core.security import get_current_user_optional
+from app.rate_limit import limiter, prediction_rate_limit, prediction_rate_limit_key
 from app.schemas.common import APIResponse
 from app.schemas.prediction import (
     DiseaseInfoResponse,
@@ -27,13 +32,18 @@ settings = get_settings()
 
 
 @router.post("/predict", response_model=APIResponse[PredictionData])
+@limiter.limit(
+    prediction_rate_limit,
+    key_func=prediction_rate_limit_key,
+    error_message="Analysis request limit reached. Please try again later.",
+)
 async def predict_disease(
     request: Request,
     file: UploadFile = File(..., description="Crop image (JPG, PNG, WEBP)"),
     language: str = Form("en", description="Response language (en/hi/mr)"),
     image_type: str = Form("unknown", description="Visible plant part: leaf/fruit/other/unknown"),
     crop_hint: Optional[str] = Form(None, description="Known crop name, if available"),
-    current_user: dict = Depends(get_current_user),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
 ):
     """
     Upload a crop image and get a provider- and scope-checked disease diagnosis.
@@ -45,6 +55,17 @@ async def predict_disease(
     - Complete disease information (symptoms, causes, treatment, prevention)
     - Localized in English, Hindi, or Marathi
     """
+    if current_user is None:
+        supabase_service = getattr(request.app.state, "supabase_service", None)
+        if settings.LOCAL_DEMO_MODE and not getattr(
+            supabase_service, "auth_enabled", False
+        ):
+            current_user = {"sub": "local-demo"}
+        elif not settings.ENABLE_GUEST_ANALYSIS:
+            raise UnauthorizedException(
+                "Sign in is required to analyze crop images."
+            )
+
     # --- Validate inputs ---
     _validate_file(file)
     lang = TranslationService.validate_language(language)
@@ -199,47 +220,52 @@ async def predict_disease(
         model_version=prediction_result.get("model_version"),
     )
 
-    # --- Save prediction to database ---
-    try:
-        from app.core.security import get_current_user_optional
-        supabase_service = request.app.state.supabase_service
+    # Guest analyses are deliberately not persisted to any account or history.
+    if current_user is None:
+        logger.info("Guest prediction completed; result was not persisted.")
+    else:
+        # --- Save prediction to database ---
+        try:
+            supabase_service = request.app.state.supabase_service
 
-        # Upload image to storage
-        image_url = await supabase_service.upload_image(contents, file.filename or "leaf.jpg")
+            image_url = await supabase_service.upload_image(
+                contents, file.filename or "leaf.jpg"
+            )
 
-        # Get user ID from authenticated payload
-        user_id = current_user.get("sub")
+            await supabase_service.save_prediction(
+                user_id=current_user.get("sub"),
+                prediction_data={
+                    "disease": response_data.disease,
+                    "disease_id": response_data.disease_id,
+                    "crop": response_data.crop,
+                    "confidence": response_data.confidence,
+                    "severity": response_data.severity,
+                    "is_healthy": response_data.is_healthy,
+                    "language": lang,
+                    "processing_time_ms": response_data.processing_time_ms,
+                    "top_predictions": [
+                        {"class": p.disease, "confidence": p.confidence}
+                        for p in response_data.top_predictions
+                    ],
+                    "disease_info": (
+                        response_data.disease_info.model_dump()
+                        if response_data.disease_info
+                        else None
+                    ),
+                },
+                image_url=image_url,
+            )
 
-        # Save prediction
-        await supabase_service.save_prediction(
-            user_id=user_id,
-            prediction_data={
-                "disease": response_data.disease,
-                "disease_id": response_data.disease_id,
-                "crop": response_data.crop,
-                "confidence": response_data.confidence,
-                "severity": response_data.severity,
-                "is_healthy": response_data.is_healthy,
-                "language": lang,
-                "processing_time_ms": response_data.processing_time_ms,
-                "top_predictions": [
-                    {"class": p.disease, "confidence": p.confidence}
-                    for p in response_data.top_predictions
-                ],
-                "disease_info": response_data.disease_info.model_dump() if response_data.disease_info else None,
-            },
-            image_url=image_url,
-        )
-
-        logger.info(
-            f"Prediction: {prediction_result['predicted_class']} "
-            f"({prediction_result['confidence']:.2%}) "
-            f"crop={prediction_result['crop']} "
-            f"lang={lang} "
-            f"time={prediction_result['processing_time_ms']}ms"
-        )
-    except Exception:
-        logger.exception("Failed to persist prediction history.")
+            logger.info(
+                "Prediction: %s (%.2f%%) crop=%s lang=%s time=%sms",
+                prediction_result["predicted_class"],
+                prediction_result["confidence"] * 100,
+                prediction_result["crop"],
+                lang,
+                prediction_result["processing_time_ms"],
+            )
+        except Exception:
+            logger.exception("Failed to persist prediction history.")
 
     return APIResponse(
         success=True,

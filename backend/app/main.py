@@ -15,6 +15,9 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.core.exceptions import AppException, app_exception_handler
+from app.rate_limit import limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -119,18 +122,13 @@ def _configure_middleware(app: FastAPI) -> None:
         allow_headers=["*"],
     )
 
-    # Rate Limiting
-    try:
-        from slowapi import Limiter, _rate_limit_exceeded_handler
-        from slowapi.util import get_remote_address
-        from slowapi.errors import RateLimitExceeded
-
-        limiter = Limiter(key_func=get_remote_address)
-        app.state.limiter = limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-        logger.info(f"Rate limiting enabled: {settings.RATE_LIMIT_PER_MINUTE}/min")
-    except ImportError:
-        logger.warning("slowapi not installed. Rate limiting disabled.")
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    logger.info(
+        "Rate limiting enabled: %s/min authenticated, %s/hour guests",
+        settings.RATE_LIMIT_PER_MINUTE,
+        settings.GUEST_ANALYSIS_LIMIT_PER_HOUR,
+    )
 
     # Request ID & Timing middleware
     @app.middleware("http")

@@ -44,9 +44,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!authLoading) {
-      if (isAuthenticated || isGuestPreview) {
+      if (isAuthenticated) {
         fetchAnalytics();
       } else {
+        setAnalytics(null);
         setLoading(false);
       }
     }
@@ -92,6 +93,24 @@ export default function Dashboard() {
             Sign In
           </a>
         </motion.div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated && isGuestPreview) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <div className="glass-card max-w-md p-8 text-center">
+          <h2 className="font-display text-2xl font-bold text-slate-900">
+            Sign in for your dashboard
+          </h2>
+          <p className="mt-2 text-slate-500">
+            Guest analyses are not saved. Sign in to view personal history and analytics.
+          </p>
+          <a href="/auth/login" className="btn-primary mt-6">
+            Sign In
+          </a>
+        </div>
       </div>
     );
   }

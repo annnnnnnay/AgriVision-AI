@@ -125,6 +125,12 @@ export default function Analyze() {
           <p className="mt-2 text-slate-600">
             Upload a clear photo of a crop leaf, fruit, or plant part for AI-assisted diagnosis.
           </p>
+          {isGuestPreview && !isAuthenticated && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Guest demo: analyses are limited and are not saved to history.
+              Sign in to save your results.
+            </p>
+          )}
           <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3">
             <Leaf className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             <div>

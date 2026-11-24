@@ -29,9 +29,11 @@ export default function History() {
 
   useEffect(() => {
     if (!authLoading) {
-      if (isAuthenticated || isGuestPreview) {
+      if (isAuthenticated) {
         fetchHistory();
       } else {
+        setHistory([]);
+        setTotal(0);
         setLoading(false);
       }
     }
@@ -249,11 +251,12 @@ export default function History() {
           >
             <Clock className="w-16 h-16 text-slate-300 mx-auto mb-4" />
             <h3 className="font-display text-xl font-bold text-slate-700 mb-2">
-              No analyses yet
+              {isGuestPreview ? "Guest analyses aren't saved" : "No analyses yet"}
             </h3>
             <p className="text-slate-500 mb-6">
-              Your analysis history will appear here after you analyze a crop
-              leaf.
+              {isGuestPreview
+                ? "Sign in to save crop analyses and view your personal history."
+                : "Your analysis history will appear here after you analyze a crop leaf."}
             </p>
             <a href="/analyze" className="btn-primary">
               <Leaf className="w-4 h-4" /> Start Analyzing

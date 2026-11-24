@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     ENVIRONMENT: str = "development"  # development | staging | production
     LOCAL_DEMO_MODE: bool = False
+    ENABLE_GUEST_ANALYSIS: bool = False
+    GUEST_ANALYSIS_LIMIT_PER_HOUR: int = Field(3, gt=0)
+    RATE_LIMIT_STORAGE_URI: str = "memory://"
 
     # --- Server ---
     HOST: str = "0.0.0.0"
